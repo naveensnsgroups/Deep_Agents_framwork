@@ -16,6 +16,17 @@ import { agentInfoRouter } from "./routes/agentInfo.js";
 import { attachWebSocketServer } from "./ws.js";
 import { SYSTEM_PROMPT, SUBAGENT_INFO } from "./agent/index.js";
 
+// Aborting a turn (the Stop button) races the Gemini SDK's own stream reader: when the
+// underlying fetch is cut off mid-read, @google/generative-ai throws from a tick that isn't
+// part of any promise chain our code awaits, so it surfaces here as an unhandled rejection
+// rather than inside runStreaming's try/catch. Node's default since v15 is to crash the whole
+// process on any unhandled rejection — which would kill every connected session, not just the
+// one that clicked Stop. Logging and continuing is the correct behavior for this class of
+// third-party async-cleanup error; it must be registered before anything else can reject.
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled rejection (server kept running):", reason);
+});
+
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "25mb" }));

@@ -74,7 +74,7 @@ Subagents that write code declare access to the bundled Agent Skills (`apps/serv
 ## UI
 
 - **File explorer** — filterable/searchable tree with expand/collapse, per-file migration-status badges driven by the live ledger, refresh.
-- **Chat** — real token-by-token streaming for every provider, tool-call/result cards with diffs, a todo/plan panel, a migration ledger panel, distinct error cards, timestamps, and copy buttons on messages and code blocks.
+- **Chat** — real token-by-token streaming for every provider, a Stop button while streaming, tool-call/result cards with diffs, a todo/plan panel, a migration ledger panel, distinct error cards, timestamps, and copy buttons on messages and code blocks.
 - **Layout** — resizable file tree / chat / editor panels with persisted widths and collapsible side panels.
 - **Editor** — Monaco, opens any file from the tree.
 
@@ -90,6 +90,6 @@ packages/shared  TypeScript types shared by server and web (WebSocket event sche
 
 - No real PTY terminal — shell output is shown as a tool-result card.
 - No inline diff/merge view in the editor yet.
-- No stop/cancel button while the agent is streaming — safely aborting an in-flight tool call (a `write_file` or `execute`) mid-stream hasn't been verified yet, so it isn't exposed in the UI.
+- The Stop button genuinely aborts model generation and stops the graph from taking further steps (verified against LangGraph's own signal propagation), but it cannot kill a shell command that's already running — `execute` spawns without a cancellable signal, so an in-flight command keeps running in the background even after Stop.
 
 Chat history, todos, and the migration ledger persist to a SQLite checkpointer (`sessions.sqlite`) and are restored automatically when you reopen a project — they are not lost on server restart.

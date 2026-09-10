@@ -57,7 +57,8 @@ export type ClientToServerMessage =
       >;
     }
   | { type: "clear_chat" }
-  | { type: "edit_message"; userMessageIndex: number; content: string };
+  | { type: "edit_message"; userMessageIndex: number; content: string }
+  | { type: "stop" };
 
 export interface Todo {
   content: string;
@@ -84,7 +85,8 @@ export type ServerToClientMessage =
   | { type: "todo_update"; todos: Todo[] }
   | { type: "ledger_update"; entries: LedgerEntry[] }
   | { type: "chat_cleared" }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  | { type: "turn_end" };
 
 export interface BrowseEntry {
   name: string;

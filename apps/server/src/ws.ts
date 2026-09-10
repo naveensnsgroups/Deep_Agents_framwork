@@ -17,6 +17,8 @@ interface Session {
   workspaceAgent?: WorkspaceAgent;
   lastMessageCount: number;
   toolCallArgs: Map<string, Record<string, unknown>>;
+  /** Set only while a turn is actively streaming, so a "stop" message has something to abort. */
+  abortController?: AbortController;
 }
 
 function send(ws: WebSocket, msg: ServerToClientMessage) {
@@ -197,14 +199,30 @@ async function runStreaming(
   input: unknown,
   config: ReturnType<typeof runConfig>
 ) {
-  const stream = (await agent.stream(input, { streamMode: ["updates", "messages"], subgraphs: true, ...config } as never)) as AsyncIterable<StreamTuple>;
+  // Verified against LangGraph's own source (runner.js): a signal passed in here is combined
+  // with the graph's internal per-step signals and races the pending task, so it genuinely
+  // stops model generation (the fetch itself is aborted) and prevents any further step from
+  // starting. It does NOT reach deepagents' LocalShellBackend.execute(), which spawns its
+  // child process without ever wiring a signal in — so a shell command already running when
+  // "stop" arrives keeps running to completion in the background; only the graph stops
+  // waiting on it. That gap is called out in the message we send back on abort.
+  const controller = new AbortController();
+  session.abortController = controller;
 
   // One entry per in-flight AI text bubble, keyed by the LangChain message id so repeated
   // chunks for the same turn accumulate into one bubble rather than starting a new one.
   const openBubbles = new Set<string>();
 
-  for await (const [namespace, mode, payload] of stream) {
-    if (mode === "messages") {
+  try {
+    const stream = (await agent.stream(input, {
+      streamMode: ["updates", "messages"],
+      subgraphs: true,
+      ...config,
+      signal: controller.signal,
+    } as never)) as AsyncIterable<StreamTuple>;
+
+    for await (const [namespace, mode, payload] of stream) {
+      if (mode === "messages") {
       // Only the top-level agent's own model turns. A delegated subagent's model calls
       // are nested one level deeper (under its own "tools:<call-id>" entry) and stay
       // invisible here — same as they always were, since `.invoke()`'s top-level
@@ -277,6 +295,16 @@ async function runStreaming(
       if (Array.isArray(inner.todos)) send(ws, { type: "todo_update", todos: inner.todos });
       if (Array.isArray(inner.migrationLedger)) send(ws, { type: "ledger_update", entries: inner.migrationLedger });
     }
+    }
+  } catch (err) {
+    if (!controller.signal.aborted) throw err;
+    for (const id of openBubbles) send(ws, { type: "agent_message_end", id });
+    send(ws, {
+      type: "error",
+      message: "Stopped. If a shell command was already running, it may still be finishing in the background — there's no way to force-kill it mid-flight yet.",
+    });
+  } finally {
+    session.abortController = undefined;
   }
 
   // Recomputed from the authoritative final state rather than tracked incrementally
@@ -284,6 +312,7 @@ async function runStreaming(
   // knows where to resume from without re-sending what already streamed live.
   const snapshot = (await agent.getState(config)) as unknown as { values?: { messages?: unknown[] } };
   session.lastMessageCount = snapshot.values?.messages?.length ?? session.lastMessageCount;
+  send(ws, { type: "turn_end" });
 }
 
 interface StateSnapshotLike {
@@ -347,6 +376,11 @@ export function attachWebSocketServer(server: Server) {
       }
 
       try {
+        if (msg.type === "stop") {
+          session.abortController?.abort();
+          return;
+        }
+
         if (msg.type === "set_workspace") {
           await session.workspaceAgent?.mcpClient?.close();
           const threadId = threadIdForProject(msg.projectRoot);

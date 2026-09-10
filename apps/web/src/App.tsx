@@ -24,6 +24,10 @@ export default function App() {
   const [fileContent, setFileContent] = useState("");
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
   const [busy, setBusy] = useState(false);
+  // True from the moment a turn is sent until the server confirms it's fully done
+  // (turn_end) — separate from `busy`, which only covers the pre-first-token gap.
+  // Governs whether the Stop button is shown.
+  const [streaming, setStreaming] = useState(false);
   const [todos, setTodos] = useState<Todo[]>([]);
   const [ledger, setLedger] = useState<LedgerEntry[]>([]);
   const [model, setModel] = useState<ModelId>("");
@@ -73,6 +77,7 @@ export default function App() {
           setTimeline([{ kind: "status", id: uid(), content: `Workspace ready: ${msg.projectRoot}${githubNote}` }]);
           setTodos([]);
           setLedger([]);
+          setStreaming(false);
           userMessageCountRef.current = 0;
           loadTree(msg.projectRoot);
           break;
@@ -123,11 +128,15 @@ export default function App() {
           setTimeline([{ kind: "status", id: uid(), content: "Started a new conversation." }]);
           setTodos([]);
           setLedger([]);
+          setStreaming(false);
           userMessageCountRef.current = 0;
           break;
         case "error":
           setBusy(false);
           setTimeline((t) => [...t, { kind: "error", id: uid(), content: msg.message }]);
+          break;
+        case "turn_end":
+          setStreaming(false);
           break;
       }
     });
@@ -136,6 +145,7 @@ export default function App() {
 
   function handleSend(content: string) {
     setTimeline((t) => [...t, { kind: "user", id: uid(), content, userIndex: userMessageCountRef.current++, timestamp: Date.now() }]);
+    setStreaming(true);
     socketRef.current?.send({ type: "user_message", content });
   }
 
@@ -148,12 +158,18 @@ export default function App() {
       return [...kept, { kind: "user", id: uid(), content, userIndex, timestamp: Date.now() }];
     });
     userMessageCountRef.current = userIndex + 1;
+    setStreaming(true);
     socketRef.current?.send({ type: "edit_message", userMessageIndex: userIndex, content });
   }
 
   function handleDecide(interruptId: string, decisions: Decision[]) {
     setTimeline((t) => t.map((item) => (item.id === interruptId && item.kind === "interrupt" ? { ...item, resolved: true } : item)));
+    setStreaming(true);
     socketRef.current?.send({ type: "resume_decisions", decisions });
+  }
+
+  function handleStop() {
+    socketRef.current?.send({ type: "stop" });
   }
 
   function handleAlwaysApprove(interruptId: string, toolNames: string[]) {
@@ -219,7 +235,9 @@ export default function App() {
             <ChatPanel
               timeline={timeline}
               busy={busy}
+              streaming={streaming}
               onSend={handleSend}
+              onStop={handleStop}
               onDecide={handleDecide}
               onAlwaysApprove={handleAlwaysApprove}
               onEditMessage={handleEditMessage}

@@ -9,7 +9,9 @@ import { ErrorBlock } from "./ErrorBlock";
 interface Props {
   timeline: TimelineItem[];
   busy: boolean;
+  streaming: boolean;
   onSend: (content: string) => void;
+  onStop: () => void;
   onDecide: (interruptId: string, decisions: Decision[]) => void;
   onAlwaysApprove: (interruptId: string, toolNames: string[]) => void;
   onEditMessage: (userIndex: number, content: string) => void;
@@ -39,7 +41,7 @@ function EmptyState({ onPick }: { onPick: (text: string) => void }) {
   );
 }
 
-export function ChatPanel({ timeline, busy, onSend, onDecide, onAlwaysApprove, onEditMessage }: Props) {
+export function ChatPanel({ timeline, busy, streaming, onSend, onStop, onDecide, onAlwaysApprove, onEditMessage }: Props) {
   const [draft, setDraft] = useState("");
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState("");
@@ -246,14 +248,24 @@ export function ChatPanel({ timeline, busy, onSend, onDecide, onAlwaysApprove, o
             disabled={busy}
             className="max-h-40 min-h-[36px] flex-1 resize-none overflow-y-auto rounded-md border border-neutral-700 bg-neutral-900 px-2 py-2 font-sans text-[13px] leading-snug text-neutral-100 outline-none focus:border-blue-500 disabled:opacity-60"
           />
-          <button
-            onClick={submit}
-            disabled={busy || !draft.trim()}
-            title="Send (Enter)"
-            className="flex h-9 flex-none cursor-pointer items-center justify-center rounded-md bg-blue-600 px-3 text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-500"
-          >
-            <SendHorizontal className="h-4 w-4" />
-          </button>
+          {streaming ? (
+            <button
+              onClick={onStop}
+              title="Stop — halts further model output and tool calls. A shell command already running may keep going in the background."
+              className="flex h-9 flex-none cursor-pointer items-center justify-center rounded-md bg-red-600 px-3 text-white hover:bg-red-500"
+            >
+              <Square className="h-3.5 w-3.5" fill="currentColor" />
+            </button>
+          ) : (
+            <button
+              onClick={submit}
+              disabled={busy || !draft.trim()}
+              title="Send (Enter)"
+              className="flex h-9 flex-none cursor-pointer items-center justify-center rounded-md bg-blue-600 px-3 text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-500"
+            >
+              <SendHorizontal className="h-4 w-4" />
+            </button>
+          )}
         </div>
       </div>
     </div>
