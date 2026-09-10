@@ -90,5 +90,6 @@ packages/shared  TypeScript types shared by server and web (WebSocket event sche
 
 - No real PTY terminal — shell output is shown as a tool-result card.
 - No inline diff/merge view in the editor yet.
-- Chat history is in-memory only (lost on server restart).
 - No stop/cancel button while the agent is streaming — safely aborting an in-flight tool call (a `write_file` or `execute`) mid-stream hasn't been verified yet, so it isn't exposed in the UI.
+
+Chat history, todos, and the migration ledger persist to a SQLite checkpointer (`sessions.sqlite`) and are restored automatically when you reopen a project — they are not lost on server restart.
