@@ -3,6 +3,7 @@ import type { FileNode, LedgerEntry, ModelId, Todo, WorkspaceOptions } from "@de
 import { WorkspacePicker } from "./components/workspace/WorkspacePicker";
 import { FileTree } from "./components/editor/FileTree";
 import { Editor } from "./components/editor/Editor";
+import { TerminalPanel } from "./components/terminal/TerminalPanel";
 import { ChatPanel } from "./components/chat/ChatPanel";
 import { TodoPanel } from "./components/chat/TodoPanel";
 import { LedgerPanel } from "./components/chat/LedgerPanel";
@@ -32,6 +33,7 @@ export default function App() {
   const [ledger, setLedger] = useState<LedgerEntry[]>([]);
   const [model, setModel] = useState<ModelId>("");
   const [showInfo, setShowInfo] = useState(false);
+  const [terminalOpen, setTerminalOpen] = useState(false);
   const [autoApproveNames, setAutoApproveNames] = useState<string[]>([]);
   const socketRef = useRef<AgentSocket | null>(null);
   const selectedPathRef = useRef<string | null>(null);
@@ -215,6 +217,8 @@ export default function App() {
         onClearChat={handleClearChat}
         autoApproveNames={autoApproveNames}
         onForgetAutoApprove={handleForgetAutoApprove}
+        onToggleTerminal={() => setTerminalOpen((o) => !o)}
+        terminalOpen={terminalOpen}
       />
       <ResizablePanels
         sidebar={
@@ -227,7 +231,18 @@ export default function App() {
             onRefresh={() => loadTree(projectRoot)}
           />
         }
-        editor={<Editor path={selectedPath} content={fileContent} onClose={handleCloseFile} />}
+        editor={
+          <div className="flex h-full min-h-0 flex-col">
+            <div className="min-h-0 flex-1">
+              <Editor path={selectedPath} content={fileContent} onClose={handleCloseFile} />
+            </div>
+            {terminalOpen && (
+              <div className="h-64 max-h-[70vh] min-h-[120px] flex-none resize-y overflow-hidden">
+                <TerminalPanel projectRoot={projectRoot} onClose={() => setTerminalOpen(false)} />
+              </div>
+            )}
+          </div>
+        }
         chat={
           <>
             <TodoPanel todos={todos} />
@@ -236,6 +251,7 @@ export default function App() {
               timeline={timeline}
               busy={busy}
               streaming={streaming}
+              projectRoot={projectRoot}
               onSend={handleSend}
               onStop={handleStop}
               onDecide={handleDecide}

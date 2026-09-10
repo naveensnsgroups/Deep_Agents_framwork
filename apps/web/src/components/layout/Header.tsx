@@ -1,4 +1,4 @@
-import { MessageSquarePlus } from "lucide-react";
+import { MessageSquarePlus, SquareTerminal } from "lucide-react";
 
 interface Props {
   projectRoot: string;
@@ -7,9 +7,20 @@ interface Props {
   onClearChat: () => void;
   autoApproveNames: string[];
   onForgetAutoApprove: (name: string) => void;
+  onToggleTerminal: () => void;
+  terminalOpen: boolean;
 }
 
-export function Header({ projectRoot, model, onShowInfo, onClearChat, autoApproveNames, onForgetAutoApprove }: Props) {
+export function Header({
+  projectRoot,
+  model,
+  onShowInfo,
+  onClearChat,
+  autoApproveNames,
+  onForgetAutoApprove,
+  onToggleTerminal,
+  terminalOpen,
+}: Props) {
   function handleClearChat() {
     if (window.confirm("Start a new conversation for this project? The current conversation history will be permanently deleted.")) {
       onClearChat();
@@ -50,6 +61,18 @@ export function Header({ projectRoot, model, onShowInfo, onClearChat, autoApprov
         >
           <MessageSquarePlus className="h-3.5 w-3.5" />
           New Chat
+        </button>
+        <button
+          onClick={onToggleTerminal}
+          title="Toggle terminal"
+          className={`flex cursor-pointer items-center gap-1 rounded-md border px-2.5 py-1 text-xs ${
+            terminalOpen
+              ? "border-blue-800 bg-blue-950 text-blue-300"
+              : "border-neutral-700 bg-neutral-800 text-neutral-200 hover:bg-neutral-700"
+          }`}
+        >
+          <SquareTerminal className="h-3.5 w-3.5" />
+          Terminal
         </button>
         <button
           onClick={onShowInfo}

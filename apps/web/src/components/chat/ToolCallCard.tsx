@@ -4,13 +4,40 @@ import type { ActionRequest, ReviewConfig } from "@deepagents-ide/shared";
 import type { Decision } from "../../types";
 import { ToolIcon } from "../../lib/toolIcons";
 import { ToolActionBody } from "./ToolActionBody";
+import { DiffMergeEditor } from "./DiffMergeEditor";
+import { SERVER_URL } from "../../lib/ws-client";
+import { fileNameOf } from "../../lib/fileTypes";
 
 interface Props {
   actionRequests: ActionRequest[];
   reviewConfigs: ReviewConfig[];
   resolved: boolean;
+  projectRoot: string;
   onDecide: (decisions: Decision[]) => void;
   onAlwaysApprove: () => void;
+}
+
+/** Same registry Monaco itself ships, looked up by extension — same approach as useFileLanguage,
+ * but usable outside a component tree already wrapped by @monaco-editor/react's loader hook. */
+function guessLanguage(path: string): string {
+  const ext = fileNameOf(path).toLowerCase().split(".").pop() ?? "";
+  const known: Record<string, string> = {
+    ts: "typescript",
+    tsx: "typescript",
+    js: "javascript",
+    jsx: "javascript",
+    py: "python",
+    json: "json",
+    md: "markdown",
+    css: "css",
+    html: "html",
+    yml: "yaml",
+    yaml: "yaml",
+    go: "go",
+    rs: "rust",
+    java: "java",
+  };
+  return known[ext] ?? "plaintext";
 }
 
 function actionSummary(action: ActionRequest): string {
@@ -18,25 +45,54 @@ function actionSummary(action: ActionRequest): string {
   return typeof target === "string" ? target : "";
 }
 
-export function ToolCallCard({ actionRequests, reviewConfigs, resolved, onDecide, onAlwaysApprove }: Props) {
+export function ToolCallCard({ actionRequests, reviewConfigs, resolved, projectRoot, onDecide, onAlwaysApprove }: Props) {
   const [editing, setEditing] = useState(false);
   const [draftArgs, setDraftArgs] = useState("");
   const [editError, setEditError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
+  // Only set when the action being edited is a write_file/edit_file — drives the Monaco
+  // diff editor instead of the raw-JSON textarea fallback.
+  const [diffDraft, setDiffDraft] = useState<{ original: string; modified: string; language: string } | null>(null);
 
   const singleAction = actionRequests.length === 1 ? actionRequests[0] : null;
   const canEdit =
     singleAction != null && (reviewConfigs.find((rc) => rc.actionName === singleAction.name)?.allowedDecisions.includes("edit") ?? false);
 
-  function startEdit() {
+  async function startEdit() {
     if (!singleAction) return;
-    setDraftArgs(JSON.stringify(singleAction.args, null, 2));
     setEditError(null);
+    setDiffDraft(null);
+    const { name, args } = singleAction;
+    const filePath = typeof args.file_path === "string" ? args.file_path : "";
+
+    if (name === "edit_file" && typeof args.old_string === "string" && typeof args.new_string === "string") {
+      setDiffDraft({ original: args.old_string, modified: args.new_string, language: guessLanguage(filePath) });
+    } else if (name === "write_file" && typeof args.content === "string") {
+      // Best-effort "before" — the file may not exist yet (a new file), in which case an
+      // empty original correctly renders the whole thing as an addition.
+      let original = "";
+      try {
+        const res = await fetch(`${SERVER_URL}/api/file?root=${encodeURIComponent(projectRoot)}&path=${encodeURIComponent(filePath)}`);
+        const data = await res.json();
+        if (typeof data.content === "string") original = data.content;
+      } catch {
+        // stays "" — network hiccup or genuinely new file, either way don't block editing
+      }
+      setDiffDraft({ original, modified: args.content, language: guessLanguage(filePath) });
+    } else {
+      setDraftArgs(JSON.stringify(args, null, 2));
+    }
     setEditing(true);
   }
 
   function saveEdit() {
     if (!singleAction) return;
+    if (diffDraft) {
+      const field = singleAction.name === "edit_file" ? "new_string" : "content";
+      onDecide([{ type: "edit", editedAction: { name: singleAction.name, args: { ...singleAction.args, [field]: diffDraft.modified } } }]);
+      setEditing(false);
+      return;
+    }
     try {
       const args = JSON.parse(draftArgs) as Record<string, unknown>;
       onDecide([{ type: "edit", editedAction: { name: singleAction.name, args } }]);
@@ -85,7 +141,14 @@ export function ToolCallCard({ actionRequests, reviewConfigs, resolved, onDecide
             <AlertTriangle className="h-4 w-4 flex-none" />
             {action.name}
           </div>
-          {editing && singleAction === action ? (
+          {editing && singleAction === action && diffDraft ? (
+            <DiffMergeEditor
+              original={diffDraft.original}
+              modified={diffDraft.modified}
+              language={diffDraft.language}
+              onChange={(modified) => setDiffDraft((d) => (d ? { ...d, modified } : d))}
+            />
+          ) : editing && singleAction === action ? (
             <textarea
               value={draftArgs}
               onChange={(e) => setDraftArgs(e.target.value)}

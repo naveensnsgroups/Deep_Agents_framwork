@@ -1,5 +1,4 @@
 import { WebSocketServer, WebSocket } from "ws";
-import type { Server } from "node:http";
 import { randomUUID } from "node:crypto";
 import { Command, REMOVE_ALL_MESSAGES } from "@langchain/langgraph";
 import { RemoveMessage } from "@langchain/core/messages";
@@ -356,8 +355,18 @@ async function replayHistory(ws: WebSocket, session: Session, threadId: string, 
   }
 }
 
-export function attachWebSocketServer(server: Server) {
-  const wss = new WebSocketServer({ server, path: "/ws" });
+/**
+ * `noServer: true` — a `WebSocketServer` constructed with `{ server, path }` instead
+ * registers its own `upgrade` listener on the shared http.Server and responds with an
+ * active 400 (not a silent skip) whenever the path doesn't match. With two such servers
+ * on one http.Server (this one and terminal.ts's), every `/ws` handshake was immediately
+ * followed by the `/pty` instance's spurious 400 on the same socket, corrupting the
+ * connection ("Invalid frame header" on the client) — reproduced and confirmed via a raw
+ * curl upgrade request before landing this fix. `noServer: true` disables that
+ * auto-registration; server.ts now owns the single `upgrade` listener and routes by path.
+ */
+export function createChatWebSocketServer() {
+  const wss = new WebSocketServer({ noServer: true });
 
   wss.on("connection", (ws) => {
     const session: Session = { lastMessageCount: 0, toolCallArgs: new Map() };

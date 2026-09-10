@@ -5,8 +5,8 @@ A Claude-Code/Cursor-style web IDE built on LangChain's `deepagents` (JS). Open 
 ## Stack
 
 - **Agent core**: `deepagents` (JS) — `LocalShellBackend` (real disk + real shell) scoped to the opened folder, `CompositeBackend` mounting Agent Skills and cross-session memories alongside the project, `todoListMiddleware`, `interruptOn` for approval gating (write_file / edit_file / delete / execute).
-- **Backend**: Node.js + TypeScript, Express (REST for the file tree/editor/folder browser), `ws` (WebSocket for live token streaming, tool events, and approve/deny).
-- **Frontend**: React + Vite + TypeScript, Monaco Editor, react-markdown.
+- **Backend**: Node.js + TypeScript, Express (REST for the file tree/editor/folder browser), `ws` (two WebSocket endpoints on one HTTP server, routed by path: `/ws` for chat streaming/tool events/approve-deny, `/pty` for the terminal), `node-pty` for real shell processes.
+- **Frontend**: React + Vite + TypeScript, Monaco Editor (including a live diff/merge view for pending edits), `@xterm/xterm` for the terminal, react-markdown.
 - **Models**: Anthropic Claude, Google Gemini, OpenAI, and OpenRouter (any model on OpenRouter's catalog), switchable per session.
 
 ## Setup
@@ -74,8 +74,8 @@ Subagents that write code declare access to the bundled Agent Skills (`apps/serv
 ## UI
 
 - **File explorer** — filterable/searchable tree with expand/collapse, per-file migration-status badges driven by the live ledger, refresh.
-- **Chat** — real token-by-token streaming for every provider, a Stop button while streaming, tool-call/result cards with diffs, a todo/plan panel, a migration ledger panel, distinct error cards, timestamps, and copy buttons on messages and code blocks.
-- **Layout** — resizable file tree / chat / editor panels with persisted widths and collapsible side panels.
+- **Chat** — real token-by-token streaming for every provider, a Stop button while streaming, tool-call/result cards with diffs, a todo/plan panel, a migration ledger panel, distinct error cards, timestamps, and copy buttons on messages and code blocks. Approving a pending `write_file`/`edit_file` opens a real Monaco diff editor (not just colored text) that you can edit directly before approving — the edited content is what actually gets written.
+- **Layout** — resizable file tree / chat / editor panels with persisted widths and collapsible side panels; a real interactive terminal (toggle in the header) docks under the editor, resizable by dragging its bottom edge.
 - **Editor** — Monaco, opens any file from the tree.
 
 ## Project layout
@@ -88,8 +88,8 @@ packages/shared  TypeScript types shared by server and web (WebSocket event sche
 
 ## Known limitations (v1)
 
-- No real PTY terminal — shell output is shown as a tool-result card.
-- No inline diff/merge view in the editor yet.
 - The Stop button genuinely aborts model generation and stops the graph from taking further steps (verified against LangGraph's own signal propagation), but it cannot kill a shell command that's already running — `execute` spawns without a cancellable signal, so an in-flight command keeps running in the background even after Stop.
+- The terminal is a real, independent shell (not tied to the agent's own `execute` calls) — it does not participate in the approval system, so anything typed there runs immediately with no review step, same as opening a terminal yourself.
+- The diff/merge editor for `write_file` treats the file's current on-disk content as "original"; if the agent's proposed write conflicts with edits you made in the Monaco editor tab that haven't round-tripped to disk, those in-editor changes won't be reflected in the diff.
 
 Chat history, todos, and the migration ledger persist to a SQLite checkpointer (`sessions.sqlite`) and are restored automatically when you reopen a project — they are not lost on server restart.

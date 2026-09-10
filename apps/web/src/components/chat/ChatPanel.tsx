@@ -10,6 +10,7 @@ interface Props {
   timeline: TimelineItem[];
   busy: boolean;
   streaming: boolean;
+  projectRoot: string;
   onSend: (content: string) => void;
   onStop: () => void;
   onDecide: (interruptId: string, decisions: Decision[]) => void;
@@ -41,7 +42,7 @@ function EmptyState({ onPick }: { onPick: (text: string) => void }) {
   );
 }
 
-export function ChatPanel({ timeline, busy, streaming, onSend, onStop, onDecide, onAlwaysApprove, onEditMessage }: Props) {
+export function ChatPanel({ timeline, busy, streaming, projectRoot, onSend, onStop, onDecide, onAlwaysApprove, onEditMessage }: Props) {
   const [draft, setDraft] = useState("");
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState("");
@@ -221,6 +222,7 @@ export function ChatPanel({ timeline, busy, streaming, onSend, onStop, onDecide,
                     actionRequests={item.actionRequests}
                     reviewConfigs={item.reviewConfigs}
                     resolved={item.resolved}
+                    projectRoot={projectRoot}
                     onDecide={(decisions) => onDecide(item.id, decisions)}
                     onAlwaysApprove={() => onAlwaysApprove(item.id, item.actionRequests.map((a) => a.name))}
                   />

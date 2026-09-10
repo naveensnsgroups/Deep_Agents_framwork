@@ -13,7 +13,8 @@ import { browseRouter } from "./routes/browse.js";
 import { providersRouter } from "./routes/providers.js";
 import { geminiProxyRouter } from "./routes/geminiProxy.js";
 import { agentInfoRouter } from "./routes/agentInfo.js";
-import { attachWebSocketServer } from "./ws.js";
+import { createChatWebSocketServer } from "./ws.js";
+import { createTerminalWebSocketServer } from "./terminal.js";
 import { SYSTEM_PROMPT, SUBAGENT_INFO } from "./agent/index.js";
 
 // Aborting a turn (the Stop button) races the Gemini SDK's own stream reader: when the
@@ -41,7 +42,22 @@ app.get("/api/health", (_req, res) => {
 });
 
 const server = http.createServer(app);
-attachWebSocketServer(server);
+const chatWss = createChatWebSocketServer();
+const terminalWss = createTerminalWebSocketServer();
+
+// Both WebSocketServers use `noServer: true` (see ws.ts/terminal.ts for why two
+// `{ server, path }` instances on one http.Server corrupt each other's handshakes) —
+// this is the single `upgrade` listener that routes each request to the right one by path.
+server.on("upgrade", (request, socket, head) => {
+  const { pathname } = new URL(request.url ?? "", "http://localhost");
+  if (pathname === "/ws") {
+    chatWss.handleUpgrade(request, socket, head, (ws) => chatWss.emit("connection", ws, request));
+  } else if (pathname === "/pty") {
+    terminalWss.handleUpgrade(request, socket, head, (ws) => terminalWss.emit("connection", ws, request));
+  } else {
+    socket.destroy();
+  }
+});
 
 const PORT = Number(process.env.PORT ?? 4000);
 server.listen(PORT, () => {
