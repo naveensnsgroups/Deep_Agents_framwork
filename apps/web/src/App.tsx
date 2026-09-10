@@ -34,6 +34,7 @@ export default function App() {
   const [model, setModel] = useState<ModelId>("");
   const [showInfo, setShowInfo] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
+  const [isGitWorkspace, setIsGitWorkspace] = useState(false);
   const [autoApproveNames, setAutoApproveNames] = useState<string[]>([]);
   const socketRef = useRef<AgentSocket | null>(null);
   const selectedPathRef = useRef<string | null>(null);
@@ -80,10 +81,18 @@ export default function App() {
           setTodos([]);
           setLedger([]);
           setStreaming(false);
+          setIsGitWorkspace(!!msg.isGitWorkspace);
           userMessageCountRef.current = 0;
+          // The server may have resolved a GitHub URL into a cloned directory on its own
+          // disk — everything downstream (file tree, file reads, the terminal's cwd) needs
+          // that real path, not whatever the user originally typed into the picker.
+          setProjectRoot(msg.projectRoot);
           loadTree(msg.projectRoot);
           break;
         }
+        case "push_result":
+          setTimeline((t) => [...t, { kind: msg.pushed ? "status" : "error", id: uid(), content: msg.detail }]);
+          break;
         case "user_message_replay":
           setTimeline((t) => [...t, { kind: "user", id: uid(), content: msg.content, userIndex: userMessageCountRef.current++, timestamp: Date.now() }]);
           break;
@@ -192,6 +201,10 @@ export default function App() {
     socketRef.current?.send({ type: "clear_chat" });
   }
 
+  function handlePushChanges() {
+    socketRef.current?.send({ type: "push_changes" });
+  }
+
   function handleSelect(path: string) {
     setSelectedPath(path);
     selectedPathRef.current = path;
@@ -219,6 +232,8 @@ export default function App() {
         onForgetAutoApprove={handleForgetAutoApprove}
         onToggleTerminal={() => setTerminalOpen((o) => !o)}
         terminalOpen={terminalOpen}
+        isGitWorkspace={isGitWorkspace}
+        onPushChanges={handlePushChanges}
       />
       <ResizablePanels
         sidebar={

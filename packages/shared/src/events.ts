@@ -58,7 +58,8 @@ export type ClientToServerMessage =
     }
   | { type: "clear_chat" }
   | { type: "edit_message"; userMessageIndex: number; content: string }
-  | { type: "stop" };
+  | { type: "stop" }
+  | { type: "push_changes" };
 
 export interface Todo {
   content: string;
@@ -74,7 +75,8 @@ export interface LedgerEntry {
 }
 
 export type ServerToClientMessage =
-  | { type: "workspace_ready"; projectRoot: string; githubTools?: number }
+  | { type: "workspace_ready"; projectRoot: string; githubTools?: number; isGitWorkspace?: boolean }
+  | { type: "push_result"; pushed: boolean; detail: string }
   | { type: "agent_thinking" }
   | { type: "user_message_replay"; content: string }
   | { type: "agent_message_start"; id: string }

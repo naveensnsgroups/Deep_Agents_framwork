@@ -1,4 +1,4 @@
-import { MessageSquarePlus, SquareTerminal } from "lucide-react";
+import { MessageSquarePlus, SquareTerminal, UploadCloud } from "lucide-react";
 
 interface Props {
   projectRoot: string;
@@ -9,6 +9,8 @@ interface Props {
   onForgetAutoApprove: (name: string) => void;
   onToggleTerminal: () => void;
   terminalOpen: boolean;
+  isGitWorkspace: boolean;
+  onPushChanges: () => void;
 }
 
 export function Header({
@@ -20,6 +22,8 @@ export function Header({
   onForgetAutoApprove,
   onToggleTerminal,
   terminalOpen,
+  isGitWorkspace,
+  onPushChanges,
 }: Props) {
   function handleClearChat() {
     if (window.confirm("Start a new conversation for this project? The current conversation history will be permanently deleted.")) {
@@ -62,6 +66,16 @@ export function Header({
           <MessageSquarePlus className="h-3.5 w-3.5" />
           New Chat
         </button>
+        {isGitWorkspace && (
+          <button
+            onClick={onPushChanges}
+            title="Commit and push everything in this cloned workspace back to its GitHub remote"
+            className="flex cursor-pointer items-center gap-1 rounded-md border border-neutral-700 bg-neutral-800 px-2.5 py-1 text-xs text-neutral-200 hover:bg-neutral-700"
+          >
+            <UploadCloud className="h-3.5 w-3.5" />
+            Push to GitHub
+          </button>
+        )}
         <button
           onClick={onToggleTerminal}
           title="Toggle terminal"

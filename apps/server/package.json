@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node -e \"require('fs').cpSync('src/agent/prompts','dist/agent/prompts',{recursive:true})\"",
     "start": "node dist/server.js"
   },
   "dependencies": {

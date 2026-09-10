@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { Command, REMOVE_ALL_MESSAGES } from "@langchain/langgraph";
 import { RemoveMessage } from "@langchain/core/messages";
 import { createWorkspaceAgent, runConfig, clearThread, type WorkspaceAgent } from "./agent/index.js";
+import { isGitUrl, resolveGitWorkspace, pushWorkspace } from "./agent/gitWorkspace.js";
 import type {
   ClientToServerMessage,
   ServerToClientMessage,
@@ -18,6 +19,12 @@ interface Session {
   toolCallArgs: Map<string, Record<string, unknown>>;
   /** Set only while a turn is actively streaming, so a "stop" message has something to abort. */
   abortController?: AbortController;
+  /** Set only when the current workspace was cloned from a GitHub URL (vs. a local path
+   * the backend already had access to) — gates whether "push_changes" has anything to do. */
+  gitWorkspaceDir?: string;
+  /** Remembered from set_workspace's options so a later push_changes doesn't need it
+   * resupplied — server-memory only, same as every other credential in this app. */
+  githubToken?: string;
 }
 
 function send(ws: WebSocket, msg: ServerToClientMessage) {
@@ -392,12 +399,41 @@ export function createChatWebSocketServer() {
 
         if (msg.type === "set_workspace") {
           await session.workspaceAgent?.mcpClient?.close();
+          session.githubToken = msg.options?.githubToken;
+
+          // Identity (thread id) stays keyed by whatever the user typed — a repo URL or a
+          // local path — so reopening the same one resumes the same conversation. The
+          // *disk* root the backend actually operates on is a separate concern: for a git
+          // URL there's no local folder to point at, so one gets created by cloning.
           const threadId = threadIdForProject(msg.projectRoot);
-          session.workspaceAgent = await createWorkspaceAgent(msg.projectRoot, msg.model, threadId, msg.options);
+          let diskRoot = msg.projectRoot;
+          if (isGitUrl(msg.projectRoot)) {
+            diskRoot = await resolveGitWorkspace(msg.projectRoot, session.githubToken);
+            session.gitWorkspaceDir = diskRoot;
+          } else {
+            session.gitWorkspaceDir = undefined;
+          }
+
+          session.workspaceAgent = await createWorkspaceAgent(diskRoot, msg.model, threadId, msg.options);
           session.lastMessageCount = 0;
           session.toolCallArgs.clear();
-          send(ws, { type: "workspace_ready", projectRoot: msg.projectRoot, githubTools: session.workspaceAgent.githubToolCount });
+          send(ws, {
+            type: "workspace_ready",
+            projectRoot: diskRoot,
+            githubTools: session.workspaceAgent.githubToolCount,
+            isGitWorkspace: !!session.gitWorkspaceDir,
+          });
           await replayHistory(ws, session, threadId, session.workspaceAgent.agent);
+          return;
+        }
+
+        if (msg.type === "push_changes") {
+          if (!session.gitWorkspaceDir) {
+            send(ws, { type: "push_result", pushed: false, detail: "This workspace wasn't opened from a GitHub URL — nothing to push." });
+          } else {
+            const result = await pushWorkspace(session.gitWorkspaceDir, "Changes from Deep Agents IDE", session.githubToken);
+            send(ws, { type: "push_result", pushed: result.pushed, detail: result.detail });
+          }
           return;
         }
 

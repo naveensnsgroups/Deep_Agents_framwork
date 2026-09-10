@@ -23,4 +23,12 @@ export const SKILLS_MOUNT = "/skills/";
 export const MEMORIES_DIR = path.join(DATA_DIR, "memories");
 export const MEMORIES_MOUNT = "/memories/";
 
+/**
+ * Where GitHub-repo workspaces get cloned. Only relevant when the backend has no access
+ * to a user's local disk (a cloud deployment) — see gitWorkspace.ts. Opening the same repo
+ * again reuses this directory (pull, not re-clone), keyed by repo+branch so two different
+ * branches of one repo don't collide.
+ */
+export const REPOS_DIR = path.join(DATA_DIR, "repos");
+
 export { DATA_DIR };

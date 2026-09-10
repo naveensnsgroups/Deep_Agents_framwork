@@ -166,11 +166,11 @@ export function WorkspacePicker({ onOpen }: Props) {
       <div className="flex w-full max-w-[520px] flex-col gap-3">
       <h1 className="text-2xl font-bold text-neutral-100">Code Migration Agents</h1>
 
-      <label className={labelClass}>Project folder</label>
+      <label className={labelClass}>Project folder or GitHub repo</label>
       <div className="flex gap-2">
         <input
           type="text"
-          placeholder="E:\\path\\to\\your\\project"
+          placeholder="E:\\path\\to\\your\\project  or  https://github.com/user/repo"
           value={projectRoot}
           onChange={(e) => setProjectRoot(e.target.value)}
           className={`${fieldClass} flex-1`}
@@ -183,6 +183,10 @@ export function WorkspacePicker({ onOpen }: Props) {
           Browse…
         </button>
       </div>
+      <p className="-mt-1 text-[11px] text-neutral-500">
+        A GitHub URL is cloned server-side (append <code>#branch-name</code> for a specific branch) — for when the
+        backend can't see your local disk, e.g. a cloud deployment.
+      </p>
 
       <label className={labelClass}>Provider</label>
       <select value={providerId} onChange={(e) => handleProviderChange(e.target.value)} className={fieldClass}>
