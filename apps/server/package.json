@@ -1,0 +1,39 @@
+{
+  "name": "@deepagents-ide/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "@deepagents-ide/shared": "*",
+    "@langchain/anthropic": "^1.5.9",
+    "@langchain/core": "^1.2.9",
+    "@langchain/google-genai": "^2.3.0",
+    "@langchain/langgraph": "^1.4.14",
+    "@langchain/langgraph-checkpoint-sqlite": "^1.0.4",
+    "@langchain/mcp-adapters": "^1.1.4",
+    "@langchain/openai": "^1.5.11",
+    "cors": "^2.8.5",
+    "deepagents": "^1.13.3",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "langchain": "^1.5.10",
+    "micromatch": "^4.0.8",
+    "simple-git": "^3.36.0",
+    "ws": "^8.18.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/micromatch": "^4.0.10",
+    "@types/node": "^22.10.2",
+    "@types/ws": "^8.5.12",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  }
+}

@@ -1,0 +1,316 @@
+import { useEffect, useState, type ClipboardEvent } from "react";
+import type { ModelId, ProviderOption, WorkspaceOptions } from "@deepagents-ide/shared";
+import { SERVER_URL } from "../../lib/ws-client";
+import { FolderBrowserModal } from "./FolderBrowserModal";
+
+interface Props {
+  onOpen: (projectRoot: string, model: ModelId, options: WorkspaceOptions) => void;
+}
+
+function splitPaths(value: string): string[] {
+  return value
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean);
+}
+
+function normalizePath(p: string): string {
+  return p.trim().replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+/**
+ * Turns a real absolute path (typed, pasted, or picked from the folder browser) into the
+ * workspace-relative glob our backend's auto-approve/protected-path matching expects.
+ * A value that already looks relative (or doesn't fall under the project root) is left as
+ * typed, so a deliberately-written glob never gets mangled.
+ */
+function toRelativeGlob(input: string, projectRoot: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) return trimmed;
+  const isAbsolute = /^[a-zA-Z]:[\\/]/.test(trimmed) || trimmed.startsWith("\\\\");
+  if (!isAbsolute) return trimmed;
+
+  const normInput = normalizePath(trimmed);
+  const normRoot = normalizePath(projectRoot);
+  if (!normRoot) return trimmed;
+
+  if (normInput.toLowerCase() === normRoot.toLowerCase()) return "/**";
+  if (normInput.toLowerCase().startsWith(normRoot.toLowerCase() + "/")) {
+    return `${normInput.slice(normRoot.length)}/**`;
+  }
+  return trimmed;
+}
+
+function normalizeGlobList(value: string, projectRoot: string): string {
+  return splitPaths(value)
+    .map((segment) => toRelativeGlob(segment, projectRoot))
+    .join(", ");
+}
+
+const fieldClass =
+  "rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-blue-500";
+const labelClass = "text-[11px] uppercase tracking-wide text-neutral-500";
+
+type BrowseTarget = "project" | "autoApprove" | "readOnly" | null;
+
+/**
+ * Everything here except the project path/provider/model/glob settings — never the API
+ * key or GitHub token. Those stay exactly as documented everywhere else in this app:
+ * server-memory only, re-entered each session, never written to disk (and localStorage
+ * is disk as far as that promise is concerned).
+ */
+const STORAGE_KEY = "deepagents:lastWorkspace";
+
+interface SavedSetup {
+  projectRoot?: string;
+  providerId?: string;
+  modelName?: string;
+  autoApprove?: string;
+  readOnly?: string;
+}
+
+function loadSaved(): SavedSetup {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as SavedSetup) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveSetup(setup: SavedSetup) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(setup));
+  } catch {
+    // private browsing / storage disabled — losing the convenience pre-fill isn't fatal
+  }
+}
+
+export function WorkspacePicker({ onOpen }: Props) {
+  const [projectRoot, setProjectRoot] = useState(() => loadSaved().projectRoot ?? "");
+  const [providers, setProviders] = useState<ProviderOption[]>([]);
+  const [providerId, setProviderId] = useState("");
+  const [modelName, setModelName] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [autoApprove, setAutoApprove] = useState(() => loadSaved().autoApprove ?? "");
+  const [readOnly, setReadOnly] = useState(() => loadSaved().readOnly ?? "");
+  const [githubToken, setGithubToken] = useState("");
+  const [browseTarget, setBrowseTarget] = useState<BrowseTarget>(null);
+
+  useEffect(() => {
+    fetch(`${SERVER_URL}/api/providers`)
+      .then((res) => res.json())
+      .then((data: { providers: ProviderOption[] }) => {
+        setProviders(data.providers);
+        const saved = loadSaved();
+        const restored = saved.providerId ? data.providers.find((p) => p.id === saved.providerId) : undefined;
+        const preferred = restored ?? data.providers.find((p) => p.serverKey) ?? data.providers[0];
+        if (preferred) {
+          setProviderId(preferred.id);
+          setModelName((restored && saved.modelName) || preferred.defaultModel);
+        }
+      })
+      .catch(() => setProviders([]));
+  }, []);
+
+  const provider = providers.find((p) => p.id === providerId);
+  const needsKey = provider != null && !provider.serverKey && !apiKey.trim();
+  const canOpen = projectRoot.trim() !== "" && modelName.trim() !== "" && providerId !== "" && !needsKey;
+
+  function handleProviderChange(id: string) {
+    setProviderId(id);
+    const next = providers.find((p) => p.id === id);
+    if (next) setModelName(next.defaultModel);
+  }
+
+  function appendGlob(current: string, setValue: (v: string) => void, picked: string) {
+    const converted = toRelativeGlob(picked, projectRoot);
+    setValue(current.trim() ? `${current.trim()}, ${converted}` : converted);
+  }
+
+  function handlePaste(e: ClipboardEvent<HTMLInputElement>, current: string, setValue: (v: string) => void) {
+    const pasted = e.clipboardData.getData("text");
+    if (!pasted || !/^[a-zA-Z]:[\\/]/.test(pasted.trim())) return; // let plain glob text paste through normally
+    e.preventDefault();
+    appendGlob(current, setValue, pasted);
+  }
+
+  function handleFolderPicked(path: string) {
+    if (browseTarget === "project") setProjectRoot(path);
+    else if (browseTarget === "autoApprove") appendGlob(autoApprove, setAutoApprove, path);
+    else if (browseTarget === "readOnly") appendGlob(readOnly, setReadOnly, path);
+    setBrowseTarget(null);
+  }
+
+  function open() {
+    const options: WorkspaceOptions = {};
+    if (apiKey.trim()) options.apiKey = apiKey.trim();
+    if (autoApprove.trim())
+      options.autoApprovePaths = splitPaths(autoApprove).map((p) => toRelativeGlob(p, projectRoot));
+    if (readOnly.trim())
+      options.readOnlyPaths = splitPaths(readOnly).map((p) => toRelativeGlob(p, projectRoot));
+    if (githubToken.trim()) options.githubToken = githubToken.trim();
+    saveSetup({
+      projectRoot: projectRoot.trim(),
+      providerId,
+      modelName: modelName.trim(),
+      autoApprove: autoApprove.trim(),
+      readOnly: readOnly.trim(),
+    });
+    onOpen(projectRoot.trim(), `${providerId}:${modelName.trim()}`, options);
+  }
+
+  return (
+    <div className="flex h-screen items-center justify-center overflow-y-auto px-5 py-6">
+      <div className="flex w-full max-w-[520px] flex-col gap-3">
+      <h1 className="text-2xl font-bold text-neutral-100">Code Migration Agents</h1>
+
+      <label className={labelClass}>Project folder</label>
+      <div className="flex gap-2">
+        <input
+          type="text"
+          placeholder="E:\\path\\to\\your\\project"
+          value={projectRoot}
+          onChange={(e) => setProjectRoot(e.target.value)}
+          className={`${fieldClass} flex-1`}
+        />
+        <button
+          type="button"
+          onClick={() => setBrowseTarget("project")}
+          className="cursor-pointer rounded-md border border-neutral-700 bg-neutral-800 px-3 text-xs text-neutral-200 hover:bg-neutral-700"
+        >
+          Browse…
+        </button>
+      </div>
+
+      <label className={labelClass}>Provider</label>
+      <select value={providerId} onChange={(e) => handleProviderChange(e.target.value)} className={fieldClass}>
+        {providers.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.label}
+            {p.serverKey ? " — key on server" : ""}
+          </option>
+        ))}
+      </select>
+
+      <label className={labelClass}>Model</label>
+      <input
+        type="text"
+        placeholder="model name"
+        value={modelName}
+        onChange={(e) => setModelName(e.target.value)}
+        className={`${fieldClass} font-mono`}
+      />
+
+      <label className={labelClass}>
+        API key {provider?.serverKey ? "(optional — server key will be used)" : "(required)"}
+      </label>
+      <input
+        type="password"
+        placeholder={provider?.keyPlaceholder ?? "your API key"}
+        value={apiKey}
+        onChange={(e) => setApiKey(e.target.value)}
+        className={`${fieldClass} font-mono`}
+        autoComplete="off"
+      />
+      <p className="-mt-1 text-[11px] text-neutral-500">
+        Kept in server memory for this session only — never written to disk.
+      </p>
+
+      <button
+        type="button"
+        onClick={() => setShowAdvanced((s) => !s)}
+        className="self-start text-xs text-blue-400 hover:text-blue-300"
+      >
+        {showAdvanced ? "▾" : "▸"} Migration settings
+      </button>
+
+      {showAdvanced && (
+        <div className="flex flex-col gap-3 rounded-md border border-neutral-800 bg-neutral-900/50 p-3">
+          <label className={labelClass}>Output folder — auto-approve writes to (comma-separated)</label>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              placeholder="/migrated/**, /out/**"
+              value={autoApprove}
+              onChange={(e) => setAutoApprove(e.target.value)}
+              onPaste={(e) => handlePaste(e, autoApprove, setAutoApprove)}
+              onBlur={() => setAutoApprove((v) => normalizeGlobList(v, projectRoot))}
+              className={`${fieldClass} flex-1 font-mono`}
+            />
+            <button
+              type="button"
+              onClick={() => setBrowseTarget("autoApprove")}
+              className="cursor-pointer rounded-md border border-neutral-700 bg-neutral-800 px-3 text-xs text-neutral-200 hover:bg-neutral-700"
+            >
+              Browse…
+            </button>
+          </div>
+          <p className="-mt-1 text-[11px] text-neutral-500">
+            Writes inside these paths skip the approval prompt. Paste or browse a real folder under
+            your project and it converts to the right pattern automatically. Everything else still
+            stops for review.
+          </p>
+
+          <label className={labelClass}>Legacy source — always ask before writing to (comma-separated)</label>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              placeholder="/legacy/**, /src/**"
+              value={readOnly}
+              onChange={(e) => setReadOnly(e.target.value)}
+              onPaste={(e) => handlePaste(e, readOnly, setReadOnly)}
+              onBlur={() => setReadOnly((v) => normalizeGlobList(v, projectRoot))}
+              className={`${fieldClass} flex-1 font-mono`}
+            />
+            <button
+              type="button"
+              onClick={() => setBrowseTarget("readOnly")}
+              className="cursor-pointer rounded-md border border-neutral-700 bg-neutral-800 px-3 text-xs text-neutral-200 hover:bg-neutral-700"
+            >
+              Browse…
+            </button>
+          </div>
+          <p className="-mt-1 text-[11px] text-neutral-500">
+            Writes here can never be auto-approved, even if an auto-approve glob covers them. Shell
+            commands always require approval regardless.
+          </p>
+
+          <label className={labelClass}>GitHub Personal Access Token (optional)</label>
+          <input
+            type="password"
+            placeholder="ghp_… or github_pat_…"
+            value={githubToken}
+            onChange={(e) => setGithubToken(e.target.value)}
+            className={`${fieldClass} font-mono`}
+            autoComplete="off"
+          />
+          <p className="-mt-1 text-[11px] text-neutral-500">
+            Connects GitHub's official MCP server so the agent can read/search repos, issues, and
+            PRs directly. Kept in server memory for this session only — never written to disk. Needs
+            a token with the scopes for whatever you want it to access.
+          </p>
+        </div>
+      )}
+
+      <button
+        disabled={!canOpen}
+        onClick={open}
+        className="mt-1 cursor-pointer rounded-md bg-blue-600 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-400"
+      >
+        Open Workspace
+      </button>
+
+      {browseTarget && (
+        <FolderBrowserModal
+          title={browseTarget === "project" ? "Select project folder" : browseTarget === "autoApprove" ? "Select output folder" : "Select protected folder"}
+          initialPath={browseTarget !== "project" && projectRoot ? projectRoot : undefined}
+          onSelect={handleFolderPicked}
+          onClose={() => setBrowseTarget(null)}
+        />
+      )}
+      </div>
+    </div>
+  );
+}
