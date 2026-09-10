@@ -3,6 +3,10 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 import type { LedgerEntry } from "@deepagents-ide/shared";
 import { LEDGER_STATUS_ORDER as STATUS_ORDER, ledgerStatusMeta as meta } from "../../lib/ledgerStatus";
 
+interface Props {
+  entries: LedgerEntry[];
+}
+
 export function LedgerPanel({ entries }: Props) {
   const [open, setOpen] = useState(false);
   if (entries.length === 0) return null;
