@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ArrowUp, Folder, X } from "lucide-react";
 import type { BrowseEntry } from "@deepagents-ide/shared";
 import { SERVER_URL } from "../../lib/ws-client";
+import { apiFetch } from "../../lib/auth";
 
 interface Props {
   /** Where to start browsing. Omit to start at the drive/root list. */
@@ -24,7 +25,7 @@ export function FolderBrowserModal({ initialPath, title, onSelect, onClose }: Pr
 
   function load(path: string) {
     setError(null);
-    fetch(`${SERVER_URL}/api/browse?path=${encodeURIComponent(path)}`)
+    apiFetch(`${SERVER_URL}/api/browse?path=${encodeURIComponent(path)}`)
       .then((res) => res.json())
       .then((data: BrowseResult | { error: string }) => {
         if ("error" in data) {

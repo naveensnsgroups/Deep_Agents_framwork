@@ -1,5 +1,6 @@
 import { Router } from "express";
 import type { AgentSubagentInfo } from "@deepagents-ide/shared";
+import { listSkills } from "../agent/skills.js";
 
 export const BUILTIN_TOOLS = [
   { name: "ls", description: "List files in a directory" },
@@ -18,7 +19,7 @@ export const BUILTIN_TOOLS = [
 export function agentInfoRouter(systemPrompt: string, subagents: AgentSubagentInfo[]) {
   const router = Router();
   router.get("/agent-info", (_req, res) => {
-    res.json({ systemPrompt, tools: BUILTIN_TOOLS, subagents });
+    res.json({ systemPrompt, tools: BUILTIN_TOOLS, subagents, skills: listSkills() });
   });
   return router;
 }

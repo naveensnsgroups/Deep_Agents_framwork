@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.json && node -e \"require('fs').cpSync('src/agent/prompts','dist/agent/prompts',{recursive:true})\"",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "eval": "tsx evals/run.ts"
   },
   "dependencies": {
     "@deepagents-ide/shared": "*",
@@ -20,6 +23,7 @@
     "cors": "^2.8.5",
     "deepagents": "^1.13.3",
     "dotenv": "^16.4.5",
+    "e2b": "^2.49.1",
     "express": "^4.21.2",
     "langchain": "^1.5.10",
     "micromatch": "^4.0.8",
@@ -35,6 +39,7 @@
     "@types/node": "^22.10.2",
     "@types/ws": "^8.5.12",
     "tsx": "^4.19.2",
-    "typescript": "^5.6.3"
+    "typescript": "^5.6.3",
+    "vitest": "^5.0.0"
   }
 }

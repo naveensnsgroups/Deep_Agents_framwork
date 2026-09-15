@@ -6,10 +6,11 @@ the mocking approach, and the setup lifecycle all change independently of the co
 # Input
 
 The test file(s) to migrate and the target test framework. Read
-`/.deepagents/migration-rules.md` first if it exists. If the target is pytest, also read
-`/skills/jest-to-pytest/SKILL.md` — it covers the exact traps in this specific translation:
-`toBe` vs `toEqual`, patch targets, async tests that silently pass without ever awaiting,
-and the Supertest → FastAPI test client mapping.
+`/.deepagents/migration-rules.md` first if it exists. Then check the playbooks mounted at
+`/skills/` — their names and descriptions are already in your context — and read any whose
+description covers this source and target test stack. A test playbook is where the traps
+specific to one translation live: assertion equivalents, patch targets, async tests that pass
+without ever awaiting, and HTTP test-client mappings. Follow it over your own recollection.
 
 # Method
 

@@ -1,4 +1,4 @@
-import type { ActionRequest, ReviewConfig, ToolResultInfo } from "@deepagents-ide/shared";
+import type { ActionRequest, ReadProvenance, ReviewConfig, ToolResultInfo } from "@deepagents-ide/shared";
 
 export type Decision =
   | { type: "approve" }
@@ -9,6 +9,14 @@ export type TimelineItem =
   | { kind: "user"; id: string; content: string; userIndex: number; timestamp: number }
   | { kind: "agent"; id: string; content: string; timestamp: number }
   | { kind: "tool"; id: string; results: ToolResultInfo[] }
-  | { kind: "interrupt"; id: string; actionRequests: ActionRequest[]; reviewConfigs: ReviewConfig[]; resolved: boolean }
+  | {
+      kind: "interrupt";
+      id: string;
+      actionRequests: ActionRequest[];
+      reviewConfigs: ReviewConfig[];
+      /** What the agent read just before proposing this — see ProvenancePanel. */
+      provenance: ReadProvenance[];
+      resolved: boolean;
+    }
   | { kind: "status"; id: string; content: string }
   | { kind: "error"; id: string; content: string };

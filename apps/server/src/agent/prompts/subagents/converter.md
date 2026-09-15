@@ -15,16 +15,20 @@ say in your report that you worked without a rulebook.
 
 # Playbooks
 
-Check whether a mounted playbook matches this file's source and target stack, and read it
-before converting:
-
-- `/skills/express-to-fastapi/SKILL.md` — Express.js routes, middleware, and handlers → FastAPI
-- `/skills/mongoose-to-pydantic-motor/SKILL.md` — Mongoose models and queries → Pydantic + Motor/PyMongo, same MongoDB collections
+The playbooks mounted at `/skills/` are already listed in your context by name and
+description. Before converting, check whether one matches this file's source and target
+stack — and read its `SKILL.md` in full if it does. More than one can apply to a single file
+(an HTTP layer that also touches the data layer), so read every match, not just the first.
 
 A matching playbook's rules apply the same way the rulebook does — they encode the exact
-traps in this specific conversion (status codes, ObjectId handling, `unique: true` being an
-index rather than validation, and similar). If neither matches this file, say so and convert
-from first principles.
+traps in that specific conversion (status codes, ObjectId handling, `unique: true` being an
+index rather than validation, and similar) rather than general advice. Follow it over your
+own recollection of a framework's conventions, and name the playbook you used in your report.
+
+If a playbook names files under `references/` or `scripts/`, read or run them only when its
+body tells you to — they exist so the main body stays short, not to be loaded up front.
+
+If nothing matches this file, say so and convert from first principles.
 
 # Method
 

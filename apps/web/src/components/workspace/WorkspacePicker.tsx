@@ -1,6 +1,7 @@
 import { useEffect, useState, type ClipboardEvent } from "react";
 import type { ModelId, ProviderOption, WorkspaceOptions } from "@deepagents-ide/shared";
 import { SERVER_URL } from "../../lib/ws-client";
+import { apiFetch } from "../../lib/auth";
 import { FolderBrowserModal } from "./FolderBrowserModal";
 
 interface Props {
@@ -99,7 +100,7 @@ export function WorkspacePicker({ onOpen }: Props) {
   const [browseTarget, setBrowseTarget] = useState<BrowseTarget>(null);
 
   useEffect(() => {
-    fetch(`${SERVER_URL}/api/providers`)
+    apiFetch(`${SERVER_URL}/api/providers`)
       .then((res) => res.json())
       .then((data: { providers: ProviderOption[] }) => {
         setProviders(data.providers);

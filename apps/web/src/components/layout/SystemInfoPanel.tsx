@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { AgentInfo } from "@deepagents-ide/shared";
 import { SERVER_URL } from "../../lib/ws-client";
+import { apiFetch } from "../../lib/auth";
 
 interface Props {
   onClose: () => void;
@@ -10,7 +11,7 @@ export function SystemInfoPanel({ onClose }: Props) {
   const [info, setInfo] = useState<AgentInfo | null>(null);
 
   useEffect(() => {
-    fetch(`${SERVER_URL}/api/agent-info`)
+    apiFetch(`${SERVER_URL}/api/agent-info`)
       .then((res) => res.json())
       .then(setInfo)
       .catch(() => setInfo(null));
@@ -36,6 +37,20 @@ export function SystemInfoPanel({ onClose }: Props) {
             <pre className="whitespace-pre-wrap rounded-md border border-neutral-800 bg-neutral-950 p-2.5 text-xs text-neutral-200">
               {info.systemPrompt}
             </pre>
+            <h3 className="mb-1.5 mt-4 text-xs uppercase tracking-wide text-neutral-500">Skills</h3>
+            <div className="flex flex-col">
+              {info.skills?.length ? (
+                info.skills.map((s) => (
+                  <div key={s.name} className="border-b border-neutral-800 py-1.5 text-xs">
+                    <span className="font-mono text-emerald-300">{s.name}</span>
+                    <div className="mt-0.5 text-neutral-400">{s.description}</div>
+                  </div>
+                ))
+              ) : (
+                <div className="text-xs text-neutral-500">No playbooks mounted.</div>
+              )}
+            </div>
+
             <h3 className="mb-1.5 mt-4 text-xs uppercase tracking-wide text-neutral-500">Subagents</h3>
             <div className="flex flex-col">
               {info.subagents?.map((s) => (

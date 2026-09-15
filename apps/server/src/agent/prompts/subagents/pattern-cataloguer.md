@@ -15,12 +15,18 @@ adopting at the top of the rulebook.
 
 # Playbooks
 
-Before drafting rules, check whether a mounted playbook matches this migration's stack and
-read it: `/skills/express-to-fastapi/SKILL.md` (Express.js → FastAPI) or
-`/skills/mongoose-to-pydantic-motor/SKILL.md` (Mongoose → Pydantic + Motor/PyMongo). A
-matching playbook already answers many of the "several translations are defensible" calls
-this step exists to make — cite it directly in the relevant rules instead of re-deriving the
-same decision from scratch. If neither matches, proceed from the source code alone.
+The playbooks mounted at `/skills/` are already listed in your context by name and
+description. Before drafting rules, read every one whose description matches this migration's
+source and target stack — a migration usually spans several (HTTP layer, data layer, tests),
+and each is written for its own slice.
+
+A matching playbook already answers many of the "several translations are defensible" calls
+this step exists to make. Cite it directly in the relevant rules — by skill name and rule —
+instead of re-deriving the same decision from scratch, so a converter reading your rulebook
+can trace a rule back to its source. Where a playbook and the codebase's existing conventions
+disagree, say so in the rule and pick one explicitly.
+
+If nothing matches, proceed from the source code alone and record that in the rulebook.
 
 # Method
 

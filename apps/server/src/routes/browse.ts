@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import type { BrowseEntry } from "@deepagents-ide/shared";
+import { isCloudMode } from "../auth.js";
 
 /** Windows has no API for "list drives" — probing letters is the standard workaround. */
 function listWindowsDrives(): BrowseEntry[] {
@@ -38,6 +39,14 @@ export function browseRouter() {
   const router = Router();
 
   router.get("/browse", (req, res) => {
+    // This endpoint exists so a user can pick a folder on the machine they are sitting at.
+    // On a cloud deployment that machine is the server, so the same feature is just a
+    // directory listing of someone else's host — and the workspace picker offers a GitHub
+    // URL there instead, which needs none of this.
+    if (isCloudMode()) {
+      return res.status(404).json({ error: "Folder browsing is disabled on cloud deployments. Open a GitHub repo URL instead." });
+    }
+
     const requested = req.query.path ? String(req.query.path) : "";
 
     try {

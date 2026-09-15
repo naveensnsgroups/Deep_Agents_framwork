@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { simpleGit } from "simple-git";
 import { REPOS_DIR } from "./paths.js";
+import type { E2BSandbox } from "./e2bSandbox.js";
+import { E2B_PROJECT_DIR } from "./sandboxSession.js";
 
 /**
  * Distinguishes "a GitHub repo to clone" from "a local folder path that already exists" —
@@ -79,6 +81,99 @@ export async function resolveGitWorkspace(input: string, githubToken?: string): 
   }
 
   return dir;
+}
+
+/**
+ * The sandbox equivalent of resolveGitWorkspace: clones straight into the microVM, so the
+ * repository only ever exists on the disposable machine that runs the agent's commands and
+ * never touches this server.
+ *
+ * Unlike the local path there is no reopen case to handle — a sandbox is created fresh for
+ * each workspace, so the clone is always the first thing in it.
+ */
+export async function cloneIntoSandbox(sandbox: E2BSandbox, input: string, githubToken?: string): Promise<void> {
+  const { url, branch } = parseGitTarget(input);
+  const e2b = await sandbox.ready();
+
+  const branchArg = branch ? `--branch ${shellQuote(branch)} ` : "";
+  const result = await e2b.commands.run(
+    `git ${credentialArgs(githubToken)}clone ${branchArg}${shellQuote(url)} ${shellQuote(E2B_PROJECT_DIR)}`,
+    { envs: gitEnv(githubToken) }
+  );
+
+  if (result.exitCode !== 0) {
+    // The token can only reach this output via git's own error text, which reports the
+    // remote without credentials — but scrub anyway rather than risk echoing it to the UI.
+    throw new Error(`git clone failed in sandbox: ${scrub(result.stderr || result.stdout, githubToken)}`);
+  }
+}
+
+/**
+ * Commits and pushes from inside the sandbox. Mirrors pushWorkspace's contract — including
+ * reporting "nothing to push" rather than making an empty commit — but every command runs in
+ * the microVM, because that is where the agent's edits actually are.
+ */
+export async function pushFromSandbox(
+  sandbox: E2BSandbox,
+  message: string,
+  githubToken?: string
+): Promise<{ pushed: boolean; detail: string }> {
+  const e2b = await sandbox.ready();
+  const cwd = E2B_PROJECT_DIR;
+
+  const status = await e2b.commands.run("git status --porcelain", { cwd });
+  if (!status.stdout.trim()) return { pushed: false, detail: "Nothing to push — no changes in the workspace." };
+
+  // -c rather than `git config`, so the identity applies to this commit instead of being
+  // written into the repository the user will get back.
+  const commit = await e2b.commands.run(
+    `git add -A && git -c user.name='Deep Agents IDE' -c user.email='noreply@deepagents.local' commit -m ${shellQuote(message)}`,
+    { cwd }
+  );
+  if (commit.exitCode !== 0) {
+    return { pushed: false, detail: `Commit failed in the sandbox: ${scrub(commit.stderr || commit.stdout, githubToken)}` };
+  }
+
+  const branch = (await e2b.commands.run("git rev-parse --abbrev-ref HEAD", { cwd })).stdout.trim();
+  const push = await e2b.commands.run(`git ${credentialArgs(githubToken)}push origin ${shellQuote(branch)}`, {
+    cwd,
+    envs: gitEnv(githubToken),
+  });
+
+  return push.exitCode === 0
+    ? { pushed: true, detail: `Pushed to ${branch}.` }
+    : { pushed: false, detail: `Committed in the sandbox, but push failed: ${scrub(push.stderr || push.stdout, githubToken)}` };
+}
+
+/**
+ * Wraps a value so a shell treats it as one literal argument.
+ *
+ * The repository URL and branch come from whatever the user typed into the workspace
+ * picker, and these strings are handed to a real shell inside the sandbox — unquoted, a
+ * repo "URL" containing `;` or a backtick would run as a second command.
+ */
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * Feeds git the token through a credential helper reading an environment variable, so it
+ * appears neither in the command line (readable via `ps` inside the sandbox) nor in
+ * `.git/config` afterwards. Only `$GH_TOKEN` — the literal name — is in the command string.
+ */
+function credentialArgs(githubToken?: string): string {
+  if (!githubToken) return "";
+  return `-c credential.helper='!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f' `;
+}
+
+function gitEnv(githubToken?: string): Record<string, string> {
+  // GIT_TERMINAL_PROMPT stops a private repo without a usable token from hanging forever on
+  // a username prompt no one can answer.
+  return githubToken ? { GH_TOKEN: githubToken, GIT_TERMINAL_PROMPT: "0" } : { GIT_TERMINAL_PROMPT: "0" };
+}
+
+function scrub(text: string, githubToken?: string): string {
+  return githubToken ? text.split(githubToken).join("***") : text;
 }
 
 /**

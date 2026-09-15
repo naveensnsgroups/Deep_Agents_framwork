@@ -19,6 +19,9 @@ import { writeInterrupt } from "./permissions.js";
 import { connectGithubTools } from "./github.js";
 import { SYSTEM_PROMPT } from "./prompts.js";
 import { migrationLedgerMiddleware } from "./ledger.js";
+import { scopeGuardrailMiddleware } from "./guardrails.js";
+import { secretRedactionMiddleware } from "./secretRedaction.js";
+import type { E2BSandbox } from "./e2bSandbox.js";
 import { DATA_DIR, SKILLS_DIR, SKILLS_MOUNT, MEMORIES_DIR, MEMORIES_MOUNT } from "./paths.js";
 
 export { SYSTEM_PROMPT, SUBAGENT_INFO };
@@ -48,17 +51,24 @@ export async function createWorkspaceAgent(
   projectRoot: string,
   model: ModelId,
   threadId: string,
-  options: WorkspaceOptions = {}
+  options: WorkspaceOptions = {},
+  sandbox?: E2BSandbox
 ): Promise<WorkspaceAgent> {
-  const projectBackend = new LocalShellBackend({
-    rootDir: projectRoot,
-    timeout: 120,
-    virtualMode: true,
-    // Without this the backend spawns every shell command with a completely empty
-    // environment — no PATH — so python, pip, pytest, npm, node and git all fail to
-    // resolve, which silently breaks any "migrate, then actually run the tests" flow.
-    inheritEnv: true,
-  });
+  // With a sandbox, every file operation and shell command the agent makes happens in a
+  // disposable microVM instead of on this host. deepagents' own documentation says
+  // LocalShellBackend — the alternative below — is for "dedicated development environments"
+  // and never production systems, since `execute` runs with the server process's privileges.
+  const projectBackend =
+    sandbox ??
+    new LocalShellBackend({
+      rootDir: projectRoot,
+      timeout: 120,
+      virtualMode: true,
+      // Without this the backend spawns every shell command with a completely empty
+      // environment — no PATH — so python, pip, pytest, npm, node and git all fail to
+      // resolve, which silently breaks any "migrate, then actually run the tests" flow.
+      inheritEnv: true,
+    });
 
   // The project stays the default route so `execute` keeps working — CompositeBackend
   // always delegates shell execution to the default backend specifically, never to a
@@ -99,8 +109,14 @@ export async function createWorkspaceAgent(
     tools: githubTools,
     systemPrompt: SYSTEM_PROMPT,
     middleware: [
+      // First in the list so it runs before anything else: an off-topic request is declined
+      // without a model call, so it costs nothing at all.
+      scopeGuardrailMiddleware(),
       todoListMiddleware(),
       migrationLedgerMiddleware(),
+      // Keeps live credentials read out of the project from reaching the model provider.
+      // See secretRedaction.ts for why the built-in PII types are unsuitable here.
+      secretRedactionMiddleware(),
       // A migration is a long single conversation over many files, so it hits the context
       // limit sooner than a normal chat. Summarize on a fraction of the model's own window
       // rather than a fixed token count (model-agnostic), keep enough recent turns that the
@@ -124,6 +140,19 @@ export async function createWorkspaceAgent(
       toolCallLimitMiddleware({ runLimit: 150, exitBehavior: "end" }),
       ...(fallbacks.length > 0 ? [modelFallbackMiddleware(...(fallbacks as [string, ...string[]]))] : []),
     ],
+    // deepagents also auto-adds a `general-purpose` subagent alongside these. It cannot be
+    // removed here: `createDeepAgent` exposes no flag for it, declaring our own subagent by
+    // that name throws ("Duplicate subagent name"), and the harness-profile route that does
+    // control it resolves by model *spec string* — which never matches, because resolveModel
+    // hands back constructed model instances.
+    //
+    // It is not a hole in the approval gate: the framework gives it
+    // `humanInTheLoopMiddleware({ interruptOn: defaultInterruptOn })`, so its writes and
+    // shell commands stop for the same human decision as everything else (verified in the
+    // installed package source). What it does miss is our prompts — it runs on deepagents'
+    // stock subagent prompt, so none of the grounding rules or the instruction-source
+    // boundary in `_shared.md` apply to it. The system prompt therefore steers delegation to
+    // the specialists explicitly; see "Delegating to subagents" there.
     subagents: migrationSubagents(backend, protectedPaths),
     skills: [SKILLS_MOUNT],
     memory: PROJECT_MEMORY_SOURCES,

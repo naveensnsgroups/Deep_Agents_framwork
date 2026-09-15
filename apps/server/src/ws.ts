@@ -3,7 +3,12 @@ import { randomUUID } from "node:crypto";
 import { Command, REMOVE_ALL_MESSAGES } from "@langchain/langgraph";
 import { RemoveMessage } from "@langchain/core/messages";
 import { createWorkspaceAgent, runConfig, clearThread, type WorkspaceAgent } from "./agent/index.js";
-import { isGitUrl, resolveGitWorkspace, pushWorkspace } from "./agent/gitWorkspace.js";
+import { isGitUrl, resolveGitWorkspace, pushWorkspace, cloneIntoSandbox, pushFromSandbox } from "./agent/gitWorkspace.js";
+import { selectSubprotocol } from "./auth.js";
+import { allowWorkspaceRoot } from "./workspaceRegistry.js";
+import type { E2BSandbox } from "./agent/e2bSandbox.js";
+import { isE2BEnabled, closeSandboxSession, createSandboxSession } from "./agent/sandboxSession.js";
+import { isReadTool, readTargetOf, scanForAgentDirectedText } from "./agent/injectionSignals.js";
 import type {
   ClientToServerMessage,
   ServerToClientMessage,
@@ -11,6 +16,7 @@ import type {
   ReviewConfig,
   Todo,
   LedgerEntry,
+  ReadProvenance,
 } from "@deepagents-ide/shared";
 
 interface Session {
@@ -25,6 +31,36 @@ interface Session {
   /** Remembered from set_workspace's options so a later push_changes doesn't need it
    * resupplied — server-memory only, same as every other credential in this app. */
   githubToken?: string;
+  /** Set only in sandbox mode: the microVM this session's agent, files and terminal share. */
+  sandbox?: E2BSandbox;
+  /** The `e2b://<id>` handle standing in for a project path while a sandbox is open. */
+  sandboxRoot?: string;
+  /**
+   * The most recent file reads, newest last, capped at RECENT_READ_LIMIT. Attached to an
+   * approval card so the reviewer can see what the agent had just read when it proposed the
+   * action — the difference between a command the agent reasoned out and one a file asked
+   * for. Reset each turn: provenance from a previous turn would be misleading rather than
+   * merely stale.
+   */
+  recentReads: ReadProvenance[];
+}
+
+/**
+ * Enough to cover the reads that plausibly motivated one action, without turning the card
+ * into a log. A converter typically reads the rulebook, a playbook and the source file
+ * before writing anything.
+ */
+const RECENT_READ_LIMIT = 6;
+
+/**
+ * Records a read for provenance. Applies to subagent reads too (not just the top-level
+ * agent's): a subagent's interrupt surfaces to the same human, and the file that influenced
+ * it is just as relevant there.
+ */
+function noteRead(session: Session, name: string, args: Record<string, unknown>, result: string) {
+  if (!isReadTool(name)) return;
+  session.recentReads.push({ target: readTargetOf(args), tool: name, signals: scanForAgentDirectedText(result) });
+  if (session.recentReads.length > RECENT_READ_LIMIT) session.recentReads.shift();
 }
 
 function send(ws: WebSocket, msg: ServerToClientMessage) {
@@ -38,11 +74,18 @@ function sleep(ms: number) {
 /**
  * One persistent LangGraph thread per project folder, not a random ID per connection —
  * reopening the same folder resumes the same conversation instead of starting a new one
- * every time the page reloads. Normalized so slashes/case/trailing-slash differences
- * between sessions still land on the same thread.
+ * every time the page reloads. Slash direction and trailing slashes are normalized so the
+ * same folder typed two ways lands on one thread.
+ *
+ * Case is folded only on Windows, where the filesystem is genuinely case-insensitive and
+ * `C:\Proj` and `c:\proj` are the same directory. Folding it everywhere meant that on Linux
+ * — i.e. any cloud deployment — `/srv/ProjA` and `/srv/proja` collapsed into a single
+ * thread despite being two different projects, so one would open with the other's history
+ * and migration ledger.
  */
 function threadIdForProject(projectRoot: string): string {
-  return projectRoot.trim().toLowerCase().replace(/\\/g, "/").replace(/\/+$/, "");
+  const normalized = projectRoot.trim().replace(/\\/g, "/").replace(/\/+$/, "");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
 interface LcMessage {
@@ -215,6 +258,10 @@ async function runStreaming(
   const controller = new AbortController();
   session.abortController = controller;
 
+  // Provenance is per-turn. Carrying last turn's reads onto this turn's approval card would
+  // point at files that had nothing to do with the action being approved.
+  session.recentReads = [];
+
   // One entry per in-flight AI text bubble, keyed by the LangChain message id so repeated
   // chunks for the same turn accumulate into one bubble rather than starting a new one.
   const openBubbles = new Set<string>();
@@ -255,9 +302,31 @@ async function runStreaming(
       const interrupts = update.__interrupt__ as Array<{ value: { actionRequests: ActionRequest[]; reviewConfigs: ReviewConfig[] } }>;
       if (interrupts?.[0]) {
         const { actionRequests, reviewConfigs } = interrupts[0].value;
-        send(ws, { type: "interrupt_request", actionRequests, reviewConfigs });
+        // A copy: the array keeps mutating as the turn continues, and this card should show
+        // what had been read at the moment the action was proposed.
+        send(ws, { type: "interrupt_request", actionRequests, reviewConfigs, provenance: [...session.recentReads] });
       }
       continue;
+    }
+
+    // Recorded for every namespace, unlike everything below. Tool-call arguments are what
+    // name the file a later read result refers to, and a subagent's reads matter for
+    // provenance — its interrupt surfaces to the same person — even though its activity
+    // stays off the main timeline.
+    if ("model_request" in update) {
+      const inner = update.model_request as { messages?: StreamAiMessage[] };
+      for (const m of inner.messages ?? []) {
+        for (const call of m.tool_calls ?? []) {
+          if (call.id) session.toolCallArgs.set(call.id, call.args ?? {});
+        }
+      }
+    }
+    if ("tools" in update) {
+      const inner = update.tools as { messages?: StreamToolMessage[] };
+      for (const m of inner.messages ?? []) {
+        const id = m.tool_call_id ?? "";
+        noteRead(session, m.name ?? "", session.toolCallArgs.get(id) ?? {}, messageText(m.content));
+      }
     }
 
     if (namespace.length !== 0) continue; // subagent-internal — stays off the main timeline
@@ -265,9 +334,6 @@ async function runStreaming(
     if ("model_request" in update) {
       const inner = update.model_request as { messages?: StreamAiMessage[] };
       for (const m of inner.messages ?? []) {
-        for (const call of m.tool_calls ?? []) {
-          if (call.id) session.toolCallArgs.set(call.id, call.args ?? {});
-        }
         // modelRetryMiddleware's exhausted-retries message is constructed directly by the
         // middleware, never streamed as chunks, so it can only be caught here — same
         // detection as the replay path below.
@@ -304,21 +370,34 @@ async function runStreaming(
     }
   } catch (err) {
     if (!controller.signal.aborted) throw err;
-    for (const id of openBubbles) send(ws, { type: "agent_message_end", id });
     send(ws, {
       type: "error",
       message: "Stopped. If a shell command was already running, it may still be finishing in the background — there's no way to force-kill it mid-flight yet.",
     });
   } finally {
     session.abortController = undefined;
-  }
 
-  // Recomputed from the authoritative final state rather than tracked incrementally
-  // through the loop above — replayHistory (used on reconnect) needs this accurate so it
-  // knows where to resume from without re-sending what already streamed live.
-  const snapshot = (await agent.getState(config)) as unknown as { values?: { messages?: unknown[] } };
-  session.lastMessageCount = snapshot.values?.messages?.length ?? session.lastMessageCount;
-  send(ws, { type: "turn_end" });
+    // Everything below used to sit after the try/catch, which meant a turn that failed for
+    // any reason other than an abort rethrew past it and never sent `turn_end` — leaving the
+    // client's `streaming` flag set, so the Stop button stayed lit and no further message
+    // could be sent until the page was reloaded. It belongs in `finally`: however the turn
+    // ended, the client is owed the news that it ended.
+    for (const id of openBubbles) send(ws, { type: "agent_message_end", id });
+
+    // Recomputed from the authoritative final state rather than tracked incrementally
+    // through the loop above — replayHistory (used on reconnect) needs this accurate so it
+    // knows where to resume from without re-sending what already streamed live. Guarded
+    // because a failed turn may have left no readable checkpoint, and losing the count is
+    // recoverable where failing to send `turn_end` is not.
+    try {
+      const snapshot = (await agent.getState(config)) as unknown as { values?: { messages?: unknown[] } };
+      session.lastMessageCount = snapshot.values?.messages?.length ?? session.lastMessageCount;
+    } catch {
+      // keep the previous count and let replayHistory re-derive it on the next connect
+    }
+
+    send(ws, { type: "turn_end" });
+  }
 }
 
 interface StateSnapshotLike {
@@ -373,13 +452,15 @@ async function replayHistory(ws: WebSocket, session: Session, threadId: string, 
  * auto-registration; server.ts now owns the single `upgrade` listener and routes by path.
  */
 export function createChatWebSocketServer() {
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, handleProtocols: selectSubprotocol });
 
   wss.on("connection", (ws) => {
-    const session: Session = { lastMessageCount: 0, toolCallArgs: new Map() };
+    const session: Session = { lastMessageCount: 0, toolCallArgs: new Map(), recentReads: [] };
 
     ws.on("close", () => {
       session.workspaceAgent?.mcpClient?.close();
+      // Releases the microVM rather than leaving it billing until its idle timeout.
+      if (session.sandboxRoot) void closeSandboxSession(session.sandboxRoot);
     });
 
     ws.on("message", async (raw) => {
@@ -406,15 +487,45 @@ export function createChatWebSocketServer() {
           // *disk* root the backend actually operates on is a separate concern: for a git
           // URL there's no local folder to point at, so one gets created by cloning.
           const threadId = threadIdForProject(msg.projectRoot);
+
+          // Replacing a workspace releases the previous sandbox — E2B bills per running hour
+          // and would otherwise hold it until the idle timeout.
+          if (session.sandboxRoot) await closeSandboxSession(session.sandboxRoot);
+          session.sandbox = undefined;
+          session.sandboxRoot = undefined;
+
           let diskRoot = msg.projectRoot;
-          if (isGitUrl(msg.projectRoot)) {
+
+          if (isE2BEnabled() && isGitUrl(msg.projectRoot)) {
+            // The repository is cloned straight into the microVM, so it never lands on this
+            // server at all. `diskRoot` stops being a path here and becomes an `e2b://<id>`
+            // handle that the file routes and terminal resolve back to this same sandbox.
+            const created = await createSandboxSession();
+            await cloneIntoSandbox(created.sandbox, msg.projectRoot, session.githubToken);
+            session.sandbox = created.sandbox;
+            session.sandboxRoot = created.root;
+            session.gitWorkspaceDir = created.root;
+            diskRoot = created.root;
+          } else if (isGitUrl(msg.projectRoot)) {
             diskRoot = await resolveGitWorkspace(msg.projectRoot, session.githubToken);
             session.gitWorkspaceDir = diskRoot;
           } else {
             session.gitWorkspaceDir = undefined;
           }
 
-          session.workspaceAgent = await createWorkspaceAgent(diskRoot, msg.model, threadId, msg.options);
+          // This is the only way a workspace becomes readable over the REST file routes or
+          // openable as a terminal — both validate against the registry instead of trusting
+          // whatever root a request carries. Registering the *resolved* value so those
+          // comparisons match regardless of how the client spells it back.
+          diskRoot = session.sandboxRoot ?? allowWorkspaceRoot(diskRoot);
+
+          session.workspaceAgent = await createWorkspaceAgent(
+            diskRoot,
+            msg.model,
+            threadId,
+            msg.options,
+            session.sandbox
+          );
           session.lastMessageCount = 0;
           session.toolCallArgs.clear();
           send(ws, {
@@ -428,10 +539,15 @@ export function createChatWebSocketServer() {
         }
 
         if (msg.type === "push_changes") {
-          if (!session.gitWorkspaceDir) {
+          const message = "Changes from Deep Agents IDE";
+          if (session.sandbox) {
+            // The edits live in the microVM, so the commit and push have to happen there.
+            const result = await pushFromSandbox(session.sandbox, message, session.githubToken);
+            send(ws, { type: "push_result", pushed: result.pushed, detail: result.detail });
+          } else if (!session.gitWorkspaceDir) {
             send(ws, { type: "push_result", pushed: false, detail: "This workspace wasn't opened from a GitHub URL — nothing to push." });
           } else {
-            const result = await pushWorkspace(session.gitWorkspaceDir, "Changes from Deep Agents IDE", session.githubToken);
+            const result = await pushWorkspace(session.gitWorkspaceDir, message, session.githubToken);
             send(ws, { type: "push_result", pushed: result.pushed, detail: result.detail });
           }
           return;

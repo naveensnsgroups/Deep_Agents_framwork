@@ -2,7 +2,14 @@ node_modules/
 dist/
 build/
 .env
+.env.*
+!.env.*.example
 *.log
 .DS_Store
 .data/
 .claude/
+
+# The evaluation fixture's .env carries deliberately fake credentials and has to be
+# committed: without it the secret-redaction eval has nothing to redact and passes
+# vacuously, which is worse than failing.
+!apps/server/evals/fixtures/**/.env

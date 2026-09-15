@@ -1,0 +1,13 @@
+node_modules
+**/node_modules
+dist
+**/dist
+.data
+**/.data
+.git
+.env
+**/.env
+*.log
+.DS_Store
+.claude
+apps/server/evals/fixtures/**/node_modules

@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { X } from "lucide-react";
-import { PTY_URL } from "../../lib/ws-client";
+import { PTY_URL, authProtocols } from "../../lib/ws-client";
 import "@xterm/xterm/css/xterm.css";
 
 interface Props {
@@ -34,7 +34,7 @@ export function TerminalPanel({ projectRoot, onClose }: Props) {
     term.open(container);
     fitAddon.fit();
 
-    const ws = new WebSocket(PTY_URL);
+    const ws = new WebSocket(PTY_URL, authProtocols());
 
     ws.onopen = () => {
       ws.send(JSON.stringify({ type: "init", cwd: projectRoot, cols: term.cols, rows: term.rows }));

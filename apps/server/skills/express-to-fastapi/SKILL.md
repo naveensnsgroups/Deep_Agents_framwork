@@ -44,6 +44,11 @@ and attaches something for later handlers (auth, tenant lookup, rate-limit ident
 genuinely wrap every request end to end, such as request logging or CORS-adjacent work.
 Use `CORSMiddleware` for the `cors` package rather than hand-writing headers.
 
+When the file you are converting performs authentication or authorisation, read
+`references/auth-patterns.md` before writing anything — it covers router-level vs per-route
+dependencies, optional auth, the 401/403 distinction, and the ordering cases where a check
+silently disappears. Skip it for files that have no auth.
+
 **Error handling becomes exceptions.** An Express error middleware
 (`(err, req, res, next)`) becomes either `HTTPException` at the raise site or an
 `@app.exception_handler(SomeError)`. Preserve the exact status codes and the response body
@@ -64,6 +69,17 @@ for translating schema-level constraints.
 Use separate models for input and output when the source distinguishes them — a create
 body that omits `_id`/timestamps is a different model from what the endpoint returns, and
 `response_model` is what strips fields such as password hashes.
+
+## Sweeping for leftovers
+
+Once a batch of files is converted, run `sh scripts/find-unconverted.sh <output-dir>` from
+this skill's directory. It greps the generated Python for constructs that should no longer
+exist — `res.json(` calls, `next(err)`, Express-style `:id` path params, a blocking
+`requests` import, leftover Mongoose calls — and exits non-zero when it finds any.
+
+It is a sweep, not a verdict: a clean result does not mean the conversion is correct, only
+that these specific mistakes are absent. Run it in addition to the checks below, never
+instead of them.
 
 ## What to check before declaring a route done
 

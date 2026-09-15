@@ -1,0 +1,20 @@
+services:
+  app:
+    build: .
+    image: deep-agents-ide:latest
+    restart: unless-stopped
+    ports:
+      # Host 80 -> container 4000. If an ALB sits in front of this instance instead,
+      # change this to "4000:4000" and point the ALB's target group at 4000 — see
+      # DEPLOY.md for why an ALB is the recommended way to get TLS without nginx.
+      - "80:4000"
+    env_file:
+      - .env.production
+    volumes:
+      # SQLite session checkpoints and cross-project memories — without this volume,
+      # `docker compose up` on a fresh container loses every in-progress conversation
+      # and everything /memories/ has learned across past migrations.
+      - app-data:/app/.data
+
+volumes:
+  app-data:

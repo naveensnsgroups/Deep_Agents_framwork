@@ -57,7 +57,22 @@ const TOOLSETS: Record<string, FsToolName[]> = {
   "pattern-cataloguer": EDIT_NO_SHELL,
   converter: EDIT_NO_SHELL,
   verifier: RUN_NO_WRITE,
+  "security-reviewer": INSPECT,
+  "skill-author": EDIT_NO_SHELL,
 };
+
+/**
+ * skill-author writes playbooks and nothing else. Framework-enforced rather than asked for:
+ * it is pointed at a finished migration, so the project's own files are sitting right there,
+ * and "only write under /skills/" is the kind of boundary that should not depend on a prompt.
+ *
+ * First-match-wins, so the allow has to precede the deny — reversed, the deny would swallow
+ * every write including the ones this subagent exists to make.
+ */
+const SKILLS_ONLY_WRITE: FilesystemPermission[] = [
+  { operations: ["write"], paths: [`${SKILLS_MOUNT}**`], mode: "allow" },
+  { operations: ["write"], paths: ["/**"], mode: "deny" },
+];
 
 const MUTATING_TOOLS: FsToolName[] = ["write_file", "edit_file", "delete"];
 
@@ -160,6 +175,46 @@ function baseSpecs(): SubAgent[] {
       }),
     },
     {
+      name: "skill-author",
+      description:
+        "Turns a finished migration into a reusable playbook under /skills/, harvested from the rulebook, the verifier's failures and the fixer's repairs. Use after a migration completes, when the same translation will be done again. Writes a draft for a human to review — never the project being migrated.",
+      systemPrompt: subagentPrompt("skill-author.md"),
+      // It has to read the existing playbooks to avoid writing one that overlaps, and the
+      // format it must follow is documented alongside them.
+      skills: [SKILLS_MOUNT],
+      responseFormat: z.object({
+        skillName: z.string(),
+        files: z.array(z.object({ path: z.string(), contains: z.string() })),
+        evidence: z.array(z.object({ rule: z.string(), camefrom: z.string() })),
+        omitted: z.array(z.object({ item: z.string(), reason: z.string() })),
+        needsReview: z.array(z.string()),
+      }),
+    },
+    {
+      name: "security-reviewer",
+      description:
+        "Compares migrated code against its source for security protections that were lost in translation — dropped authorisation, weakened validation, widened error responses, reintroduced injection. Use after conversion, alongside the verifier: a missing auth check builds cleanly and passes the tests.",
+      systemPrompt: subagentPrompt("security-reviewer.md"),
+      // Read-only by tool set, so "does not fix anything" is enforced rather than asked for —
+      // the same reasoning as the verifier, and the same reason its findings can be trusted:
+      // an agent that can edit the code it is judging can quietly make its own check pass.
+      // No `execute` either; this review is a read of two files, not a run of anything.
+      responseFormat: z.object({
+        verdict: z.enum(["pass", "fail", "partial"]),
+        filesReviewed: z.array(z.object({ migrated: z.string(), source: z.string() })),
+        findings: z.array(
+          z.object({
+            path: z.string(),
+            lostProtection: z.string(),
+            sourceEvidence: z.string(),
+            severity: z.enum(["high", "medium", "low"]),
+          })
+        ),
+        preExisting: z.array(z.string()),
+        notes: z.string(),
+      }),
+    },
+    {
       name: "fixer",
       description:
         "Repairs the specific findings a verifier reported, re-runs the failing check, and confirms the fix. Use after verification fails rather than fixing in the main conversation.",
@@ -177,7 +232,7 @@ export function migrationSubagents(backend: Backend, protectedPaths: string[] = 
     // Path rules can only be attached where `execute` is absent; with a shell available
     // they would be unenforceable and deepagents rejects them outright.
     const canWrite = tools.some((t) => MUTATING_TOOLS.includes(t));
-    const permissions = canWrite ? noWriteToProtected : [];
+    const permissions = spec.name === "skill-author" ? SKILLS_ONLY_WRITE : canWrite ? noWriteToProtected : [];
     return { ...spec, middleware: restrictTools(backend, tools, permissions) };
   });
 }

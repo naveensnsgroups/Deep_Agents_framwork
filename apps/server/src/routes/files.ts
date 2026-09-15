@@ -2,16 +2,11 @@ import { Router } from "express";
 import fs from "node:fs";
 import path from "node:path";
 import type { FileNode } from "@deepagents-ide/shared";
+import { isWorkspaceRoot, resolveInWorkspace } from "../workspaceRegistry.js";
+import { sandboxForRoot } from "../agent/sandboxSession.js";
+import { sandboxReadFile, sandboxTree } from "./sandboxFiles.js";
 
 const IGNORED = new Set(["node_modules", ".git", "dist", "build", ".next"]);
-
-function resolveSafe(root: string, relPath: string): string {
-  const resolved = path.resolve(root, relPath || ".");
-  if (!resolved.startsWith(path.resolve(root))) {
-    throw new Error("Path escapes workspace root");
-  }
-  return resolved;
-}
 
 function buildTree(root: string, dir: string, depth: number): FileNode[] {
   if (depth > 6) return [];
@@ -32,28 +27,36 @@ function buildTree(root: string, dir: string, depth: number): FileNode[] {
 export function filesRouter() {
   const router = Router();
 
-  router.get("/files", (req, res) => {
+  // `root` is echoed back by the client from whatever `workspace_ready` reported, so it is
+  // only ever a workspace this server itself opened — but it still arrives over the wire, so
+  // both routes resolve it rather than trusting it. In sandbox mode that root is an
+  // `e2b://<id>` handle instead of a path, and the files live in the microVM.
+  router.get("/files", async (req, res) => {
     const root = String(req.query.root ?? "");
-    if (!root || !fs.existsSync(root)) {
-      return res.status(400).json({ error: "Invalid or missing root directory" });
-    }
+    const sandbox = sandboxForRoot(root);
+
     try {
-      const tree = buildTree(root, root, 0);
-      res.json({ tree });
+      if (sandbox) {
+        return res.json({ tree: await sandboxTree(sandbox) });
+      }
+      if (!isWorkspaceRoot(root) || !fs.existsSync(root)) {
+        return res.status(400).json({ error: "Invalid or missing root directory" });
+      }
+      res.json({ tree: buildTree(root, root, 0) });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }
   });
 
-  router.get("/file", (req, res) => {
+  router.get("/file", async (req, res) => {
     const root = String(req.query.root ?? "");
     const filePath = String(req.query.path ?? "");
-    if (!root || !fs.existsSync(root)) {
-      return res.status(400).json({ error: "Invalid or missing root directory" });
-    }
+    const sandbox = sandboxForRoot(root);
+
     try {
-      const resolved = resolveSafe(root, filePath);
-      const content = fs.readFileSync(resolved, "utf-8");
+      const content = sandbox
+        ? await sandboxReadFile(sandbox, filePath)
+        : fs.readFileSync(resolveInWorkspace(root, filePath), "utf-8");
       res.json({ content });
     } catch (err) {
       res.status(400).json({ error: (err as Error).message });

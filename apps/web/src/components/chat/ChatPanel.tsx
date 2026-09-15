@@ -221,6 +221,7 @@ export function ChatPanel({ timeline, busy, streaming, projectRoot, onSend, onSt
                   <ToolCallCard
                     actionRequests={item.actionRequests}
                     reviewConfigs={item.reviewConfigs}
+                    provenance={item.provenance}
                     resolved={item.resolved}
                     projectRoot={projectRoot}
                     onDecide={(decisions) => onDecide(item.id, decisions)}

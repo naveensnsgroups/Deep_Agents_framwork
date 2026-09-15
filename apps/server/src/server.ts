@@ -1,4 +1,5 @@
 import path from "node:path";
+import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 
@@ -15,6 +16,7 @@ import { geminiProxyRouter } from "./routes/geminiProxy.js";
 import { agentInfoRouter } from "./routes/agentInfo.js";
 import { createChatWebSocketServer } from "./ws.js";
 import { createTerminalWebSocketServer } from "./terminal.js";
+import { assertAuthConfig, authorizeUpgrade, isAuthEnabled, localhostOnly, requireAuth } from "./auth.js";
 import { SYSTEM_PROMPT, SUBAGENT_INFO } from "./agent/index.js";
 
 // Aborting a turn (the Stop button) races the Gemini SDK's own stream reader: when the
@@ -28,18 +30,53 @@ process.on("unhandledRejection", (reason) => {
   console.error("Unhandled rejection (server kept running):", reason);
 });
 
-const app = express();
-app.use(cors());
-app.use(express.json({ limit: "25mb" }));
-app.use("/gemini-proxy", geminiProxyRouter());
-app.use("/api", filesRouter());
-app.use("/api", browseRouter());
-app.use("/api", providersRouter());
-app.use("/api", agentInfoRouter(SYSTEM_PROMPT, SUBAGENT_INFO));
+assertAuthConfig();
 
+// Comma-separated list, e.g. "https://my-app.vercel.app". Unset means reflect any origin,
+// which is only appropriate locally — a cloud deployment serves its frontend from one known
+// host, and `cors()` with no allowlist let any page on the internet drive this API using
+// whatever credentials the visitor's browser would attach.
+const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "")
+  .split(",")
+  .map((o) => o.trim())
+  .filter(Boolean);
+
+const app = express();
+app.use(cors(allowedOrigins.length > 0 ? { origin: allowedOrigins } : {}));
+app.use(express.json({ limit: "25mb" }));
+
+// Before every router, so a route added later is authenticated by default rather than by
+// remembering to opt in. /api/health stays open so a load balancer can reach it.
+// Also tells the frontend whether it needs a token before it tries anything else — the token
+// cannot be baked into the web bundle (it would be readable by anyone who loads the page),
+// so the browser has to ask the user for it, and only asks when there is something to ask for.
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true });
+  res.json({ ok: true, authRequired: isAuthEnabled() });
 });
+
+app.use("/gemini-proxy", localhostOnly, geminiProxyRouter());
+app.use("/api", requireAuth, filesRouter());
+app.use("/api", requireAuth, browseRouter());
+app.use("/api", requireAuth, providersRouter());
+app.use("/api", requireAuth, agentInfoRouter(SYSTEM_PROMPT, SUBAGENT_INFO));
+
+// Serves the built frontend from the same origin and port as the API, so the browser's
+// same-origin assumption (see apps/web/src/lib/serverUrl.ts: SERVER_URL defaults to
+// window.location.origin) holds in production without a separate static host or a reverse
+// proxy in front. The Docker image copies apps/web/dist to dist/public next to this compiled
+// file; a bare `npm run dev` never has that directory, so this stays inert for local
+// development instead of throwing.
+const webDist = path.join(__dirname, "public");
+if (fs.existsSync(webDist)) {
+  app.use(express.static(webDist));
+  // Only for GET requests that reached here unmatched by any API/proxy route above and
+  // don't look like a static asset request (no file extension) — otherwise a missing JS/CSS
+  // chunk would silently 200 with index.html's HTML instead of a real 404.
+  app.get(/^(?!\/api|\/gemini-proxy).*/, (req, res, next) => {
+    if (path.extname(req.path)) return next();
+    res.sendFile(path.join(webDist, "index.html"));
+  });
+}
 
 const server = http.createServer(app);
 const chatWss = createChatWebSocketServer();
@@ -50,6 +87,16 @@ const terminalWss = createTerminalWebSocketServer();
 // this is the single `upgrade` listener that routes each request to the right one by path.
 server.on("upgrade", (request, socket, head) => {
   const { pathname } = new URL(request.url ?? "", "http://localhost");
+
+  // Both sockets are as privileged as the REST API — /ws drives the agent, /pty is a shell —
+  // so neither may be reachable without the same token. Checked here, in the one place every
+  // upgrade passes through, rather than inside each server's connection handler.
+  if (!authorizeUpgrade(request)) {
+    socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+
   if (pathname === "/ws") {
     chatWss.handleUpgrade(request, socket, head, (ws) => chatWss.emit("connection", ws, request));
   } else if (pathname === "/pty") {

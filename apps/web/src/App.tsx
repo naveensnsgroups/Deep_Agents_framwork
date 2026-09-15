@@ -11,6 +11,7 @@ import { Header } from "./components/layout/Header";
 import { SystemInfoPanel } from "./components/layout/SystemInfoPanel";
 import { ResizablePanels } from "./components/layout/ResizablePanels";
 import { AgentSocket, SERVER_URL } from "./lib/ws-client";
+import { apiFetch } from "./lib/auth";
 import type { Decision, TimelineItem } from "./types";
 
 function uid() {
@@ -47,7 +48,7 @@ export default function App() {
   const loadTree = useCallback(async (root: string) => {
     setTreeLoading(true);
     try {
-      const res = await fetch(`${SERVER_URL}/api/files?root=${encodeURIComponent(root)}`);
+      const res = await apiFetch(`${SERVER_URL}/api/files?root=${encodeURIComponent(root)}`);
       const data = await res.json();
       if (data.tree) setTree(data.tree);
     } finally {
@@ -56,7 +57,7 @@ export default function App() {
   }, []);
 
   const loadFile = useCallback(async (root: string, path: string) => {
-    const res = await fetch(`${SERVER_URL}/api/file?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`);
+    const res = await apiFetch(`${SERVER_URL}/api/file?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`);
     const data = await res.json();
     if (typeof data.content === "string") setFileContent(data.content);
   }, []);
@@ -122,7 +123,7 @@ export default function App() {
           const id = uid();
           setTimeline((t) => [
             ...t,
-            { kind: "interrupt", id, actionRequests: msg.actionRequests, reviewConfigs: msg.reviewConfigs, resolved: autoApproved },
+            { kind: "interrupt", id, actionRequests: msg.actionRequests, reviewConfigs: msg.reviewConfigs, provenance: msg.provenance ?? [], resolved: autoApproved },
           ]);
           if (autoApproved) {
             socket.send({ type: "resume_decisions", decisions: msg.actionRequests.map(() => ({ type: "approve" })) });
@@ -144,6 +145,10 @@ export default function App() {
           break;
         case "error":
           setBusy(false);
+          // Also clears `streaming`: the server sends `turn_end` on every path now, but an
+          // error is by definition the turn being over, and leaving this to one message
+          // arriving is what previously jammed the Stop button on permanently.
+          setStreaming(false);
           setTimeline((t) => [...t, { kind: "error", id: uid(), content: msg.message }]);
           break;
         case "turn_end":

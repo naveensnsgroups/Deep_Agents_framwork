@@ -20,6 +20,28 @@ export interface ReviewConfig {
   allowedDecisions: Array<"approve" | "edit" | "reject">;
 }
 
+/** Text in a project file that addresses an AI agent rather than a human reader. */
+export interface InjectionSignal {
+  label: string;
+  excerpt: string;
+}
+
+/**
+ * What the agent read just before proposing the action awaiting approval.
+ *
+ * Without this, an approval card shows a command with no indication of where it came from —
+ * so a command the agent reasoned its way to and one a file told it to run look identical at
+ * the moment you have to decide. The agent reads repositories nobody in the conversation
+ * wrote, which makes that distinction the whole point of the review step.
+ */
+export interface ReadProvenance {
+  /** The file or pattern the read targeted. */
+  target: string;
+  tool: string;
+  /** Non-empty when the file contained text aimed at an agent. */
+  signals: InjectionSignal[];
+}
+
 export interface ToolResultInfo {
   toolCallId: string;
   name: string;
@@ -83,7 +105,13 @@ export type ServerToClientMessage =
   | { type: "agent_message_delta"; id: string; delta: string }
   | { type: "agent_message_end"; id: string }
   | { type: "tool_call_result"; results: ToolResultInfo[] }
-  | { type: "interrupt_request"; actionRequests: ActionRequest[]; reviewConfigs: ReviewConfig[] }
+  | {
+      type: "interrupt_request";
+      actionRequests: ActionRequest[];
+      reviewConfigs: ReviewConfig[];
+      /** Files read immediately before this action was proposed — see ReadProvenance. */
+      provenance?: ReadProvenance[];
+    }
   | { type: "todo_update"; todos: Todo[] }
   | { type: "ledger_update"; entries: LedgerEntry[] }
   | { type: "chat_cleared" }
@@ -113,8 +141,14 @@ export interface AgentSubagentInfo {
   readOnly?: boolean;
 }
 
+export interface AgentSkillInfo {
+  name: string;
+  description: string;
+}
+
 export interface AgentInfo {
   systemPrompt: string;
   tools: AgentToolInfo[];
   subagents: AgentSubagentInfo[];
+  skills: AgentSkillInfo[];
 }

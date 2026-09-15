@@ -1,16 +1,21 @@
 import { useState } from "react";
 import { AlertTriangle, Check, ChevronDown, ChevronRight, Pencil, ShieldCheck, X } from "lucide-react";
-import type { ActionRequest, ReviewConfig } from "@deepagents-ide/shared";
+import type { ActionRequest, ReadProvenance, ReviewConfig } from "@deepagents-ide/shared";
 import type { Decision } from "../../types";
 import { ToolIcon } from "../../lib/toolIcons";
 import { ToolActionBody } from "./ToolActionBody";
 import { DiffMergeEditor } from "./DiffMergeEditor";
 import { SERVER_URL } from "../../lib/ws-client";
+import { apiFetch } from "../../lib/auth";
 import { fileNameOf } from "../../lib/fileTypes";
+import { ProvenancePanel } from "./ProvenancePanel";
 
 interface Props {
   actionRequests: ActionRequest[];
   reviewConfigs: ReviewConfig[];
+  /** Files read just before this action was proposed. Optional so non-interrupt uses of
+   * this card (a plain tool result) need not supply it. */
+  provenance?: ReadProvenance[];
   resolved: boolean;
   projectRoot: string;
   onDecide: (decisions: Decision[]) => void;
@@ -45,7 +50,7 @@ function actionSummary(action: ActionRequest): string {
   return typeof target === "string" ? target : "";
 }
 
-export function ToolCallCard({ actionRequests, reviewConfigs, resolved, projectRoot, onDecide, onAlwaysApprove }: Props) {
+export function ToolCallCard({ actionRequests, reviewConfigs, provenance, resolved, projectRoot, onDecide, onAlwaysApprove }: Props) {
   const [editing, setEditing] = useState(false);
   const [draftArgs, setDraftArgs] = useState("");
   const [editError, setEditError] = useState<string | null>(null);
@@ -72,7 +77,7 @@ export function ToolCallCard({ actionRequests, reviewConfigs, resolved, projectR
       // empty original correctly renders the whole thing as an addition.
       let original = "";
       try {
-        const res = await fetch(`${SERVER_URL}/api/file?root=${encodeURIComponent(projectRoot)}&path=${encodeURIComponent(filePath)}`);
+        const res = await apiFetch(`${SERVER_URL}/api/file?root=${encodeURIComponent(projectRoot)}&path=${encodeURIComponent(filePath)}`);
         const data = await res.json();
         if (typeof data.content === "string") original = data.content;
       } catch {
@@ -180,6 +185,10 @@ export function ToolCallCard({ actionRequests, reviewConfigs, resolved, projectR
         </div>
       ) : (
         <div className="flex flex-col gap-1.5">
+          {/* Above the buttons deliberately: this is context for the decision, so it has to
+              be readable before the hand reaches Approve, not discovered afterwards. */}
+          {provenance && provenance.length > 0 ? <ProvenancePanel provenance={provenance} /> : null}
+
           {/* Primary decision — the two actions that resolve the interrupt — get the top
               row to themselves so they never wrap under the wider "Always Approve" label
               (measured overflowing a 420px chat panel before this fix). Always Approve and

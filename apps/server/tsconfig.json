@@ -11,5 +11,9 @@
     "resolveJsonModule": true,
     "declaration": false
   },
-  "include": ["src"]
+  "include": ["src"],
+  // Tests are run from source by vitest and have no business in the production build —
+  // compiling them also made vitest discover and run every suite twice, once from `src`
+  // and again from `dist`.
+  "exclude": ["src/**/*.test.ts"]
 }
