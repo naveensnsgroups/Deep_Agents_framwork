@@ -7,6 +7,10 @@ dist
 .git
 .env
 **/.env
+.env.*
+**/.env.*
+!**/*.example
+.github
 *.log
 .DS_Store
 .claude

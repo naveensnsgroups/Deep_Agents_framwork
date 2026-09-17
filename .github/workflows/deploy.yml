@@ -1,0 +1,96 @@
+# Every push to `aws` is checked, built into an image, pushed to ECR and rolled out to ECS.
+# AWS access comes from GitHub's OIDC token assuming an IAM role — no long-lived AWS keys are
+# stored in GitHub. App secrets never pass through here either: the task definition points at
+# SSM Parameter Store and ECS reads them when the container starts. Setup: deploy/ecs/README.md.
+name: Deploy to ECS
+
+on:
+  push:
+    branches: [aws]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+# A second push while a deploy is running waits instead of racing it for the one host port.
+concurrency:
+  group: deploy-aws
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-south-1
+  ECR_REPOSITORY: deep-agents-app
+  ECS_CLUSTER: deep-agents-cluster
+  ECS_SERVICE: deep-agents-service
+  CONTAINER_NAME: app
+  TASK_DEFINITION: deploy/ecs/task-definition.json
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      # Type-checks both apps (web's build runs tsc -b) as well as producing the bundles.
+      - run: npm run build
+      - run: npm test --workspace=apps/server
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: ${{ env.TASK_DEFINITION }}
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+
+      - id: deploy
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          service: ${{ env.ECS_SERVICE }}
+
+      # The service is created with 0 tasks (it has no real image until this workflow's first
+      # run), so the count is set here — which also brings the app back if it was scaled to 0.
+      # With the deployment circuit breaker on, a revision that never turns healthy is rolled
+      # back by ECS — the service then settles on the *old* revision, so "stable" alone would
+      # report success; the final check makes the run fail unless the new revision is live.
+      - name: Run one task and wait until healthy
+        env:
+          NEW_TASK_DEF: ${{ steps.deploy.outputs.task-definition-arn }}
+        run: |
+          aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_SERVICE" --desired-count 1 > /dev/null
+          aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE"
+          live=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --query 'services[0].taskDefinition' --output text)
+          if [ "$live" != "$NEW_TASK_DEF" ]; then
+            echo "::error::New revision did not become healthy and was rolled back (live: $live). Check: aws logs tail /ecs/deep-agents-app"
+            exit 1
+          fi
