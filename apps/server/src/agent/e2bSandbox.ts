@@ -1,5 +1,42 @@
-import { CommandExitError, Sandbox } from "e2b";
-import { BaseSandbox, type ExecuteResponse, type FileDownloadResponse, type FileUploadResponse } from "deepagents";
+import { CommandExitError, NotFoundError, Sandbox } from "e2b";
+import {
+  BaseSandbox,
+  type DeleteResult,
+  type EditResult,
+  type ExecuteResponse,
+  type FileDownloadResponse,
+  type FileUploadResponse,
+  type GlobResult,
+  type GrepResult,
+  type LsResult,
+  type ReadRawResult,
+  type ReadResult,
+  type WriteResult,
+} from "deepagents";
+
+/**
+ * The agent addresses files the way it does everywhere else in this app — `/src/app.js`,
+ * `/migrated/**`, `./.deepagents/AGENTS.md` — with `/` meaning the project root. BaseSandbox
+ * instead treats every path as absolute on the microVM's own filesystem, where the clone lives
+ * at `root` (e.g. /home/user/project). Unmapped, `/src/app.js` pointed at the VM's filesystem
+ * root and a relative path at the user's home, so the agent could not see or edit the repo.
+ */
+export function toSandboxPath(root: string | undefined, virtualPath: string): string {
+  if (!root) return virtualPath;
+  if (virtualPath === root || virtualPath.startsWith(`${root}/`)) return virtualPath;
+  let rel = virtualPath;
+  if (rel === "." || rel === "./") rel = "";
+  else if (rel.startsWith("./")) rel = rel.slice(2);
+  rel = rel.replace(/^\/+/, "");
+  return rel ? `${root}/${rel}` : root;
+}
+
+/** Reverses toSandboxPath, so results carry the same paths permissions and approvals match on. */
+export function fromSandboxPath(root: string | undefined, sandboxPath: string): string {
+  if (!root) return sandboxPath;
+  if (sandboxPath === root) return "/";
+  return sandboxPath.startsWith(`${root}/`) ? sandboxPath.slice(root.length) : sandboxPath;
+}
 
 /**
  * Runs the agent's shell commands and file operations inside an E2B microVM instead of on
@@ -159,7 +196,7 @@ export class E2BSandbox extends BaseSandbox {
           // Copied into a fresh ArrayBuffer: a Uint8Array may be a view onto a larger
           // pooled buffer, and passing `.buffer` straight through would upload the whole
           // pool rather than this file's bytes.
-          await sandbox.files.write(path, content.slice().buffer as ArrayBuffer);
+          await sandbox.files.write(this.toSandbox(path), content.slice().buffer as ArrayBuffer);
           return { path, error: null };
         } catch (err) {
           return { path, error: uploadErrorCode(err) };
@@ -173,13 +210,61 @@ export class E2BSandbox extends BaseSandbox {
     return Promise.all(
       paths.map(async (path): Promise<FileDownloadResponse> => {
         try {
-          const content = await sandbox.files.read(path, { format: "bytes" });
+          const content = await sandbox.files.read(this.toSandbox(path), { format: "bytes" });
           return { path, content, error: null };
         } catch (err) {
           return { path, content: null, error: downloadErrorCode(err) };
         }
       })
     );
+  }
+
+  override async ls(path: string): Promise<LsResult> {
+    return this.unmap(await super.ls(this.toSandbox(path)));
+  }
+
+  override async read(filePath: string, offset?: number, limit?: number): Promise<ReadResult> {
+    return this.unmap(await super.read(this.toSandbox(filePath), offset, limit));
+  }
+
+  override async readRaw(filePath: string): Promise<ReadRawResult> {
+    return this.unmap(await super.readRaw(this.toSandbox(filePath)));
+  }
+
+  override async grep(pattern: string, path = "/", glob?: string | null, maxCount?: number | null): Promise<GrepResult> {
+    return this.unmap(await super.grep(pattern, this.toSandbox(path), glob, maxCount));
+  }
+
+  override async glob(pattern: string, path = "/"): Promise<GlobResult> {
+    return this.unmap(await super.glob(pattern, this.toSandbox(path)));
+  }
+
+  override async write(filePath: string, content: string): Promise<WriteResult> {
+    return this.unmap(await super.write(this.toSandbox(filePath), content));
+  }
+
+  override async delete(filePath: string): Promise<DeleteResult> {
+    return this.unmap(await super.delete(this.toSandbox(filePath)));
+  }
+
+  override async edit(filePath: string, oldString: string, newString: string, replaceAll?: boolean): Promise<EditResult> {
+    return this.unmap(await super.edit(this.toSandbox(filePath), oldString, newString, replaceAll));
+  }
+
+  private toSandbox(path: string): string {
+    return toSandboxPath(this.options.cwd, path);
+  }
+
+  /** Rewrites every path a result carries — including inside error text — back to project-relative form. */
+  private unmap<T>(result: T): T {
+    const root = this.options.cwd;
+    if (!root) return result;
+    const r = result as { error?: string; path?: string; files?: Array<{ path: string }>; matches?: Array<{ path: string }> };
+    if (typeof r.error === "string") r.error = r.error.split(`${root}/`).join("/");
+    if (typeof r.path === "string") r.path = fromSandboxPath(root, r.path);
+    r.files?.forEach((f) => (f.path = fromSandboxPath(root, f.path)));
+    r.matches?.forEach((m) => (m.path = fromSandboxPath(root, m.path)));
+    return result;
   }
 
   /** Ends the billed session. Nothing else reclaims it before the idle timeout. */
@@ -196,12 +281,14 @@ export class E2BSandbox extends BaseSandbox {
 }
 
 /**
- * E2B reports these as message text rather than typed errors for filesystem operations, so
- * the mapping to the protocol's codes is by inspection. Anything unrecognized becomes
- * "invalid_path", which is the protocol's least specific failure rather than a wrong claim
- * about permissions.
+ * A missing file arrives as E2B's typed FileNotFoundError (a NotFoundError), whose message does
+ * not necessarily say "not found" — matching on text alone misreported it as "invalid_path",
+ * which callers treat as a real failure instead of an absent optional file. Other conditions
+ * are still only distinguishable by message. Anything unrecognized becomes "invalid_path", the
+ * protocol's least specific failure rather than a wrong claim about permissions.
  */
 function classify(err: unknown): "file_not_found" | "permission_denied" | "is_directory" | "invalid_path" {
+  if (err instanceof NotFoundError) return "file_not_found";
   const message = (err as Error)?.message?.toLowerCase() ?? "";
   if (message.includes("not found") || message.includes("no such file")) return "file_not_found";
   if (message.includes("permission denied")) return "permission_denied";

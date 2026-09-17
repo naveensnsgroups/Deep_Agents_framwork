@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { AlertCircle, ChevronDown, ChevronRight, Copy, CopyCheck } from "lucide-react";
+import { copyText } from "../../lib/browser";
 
 /**
  * A real provider error (e.g. a Gemini 429 with its retry-info payload) is a single long
@@ -18,7 +19,7 @@ export function ErrorBlock({ content }: { content: string }) {
   const hasMore = content.length > firstLine.length;
 
   function copy() {
-    navigator.clipboard.writeText(content).then(() => {
+    copyText(content).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     });

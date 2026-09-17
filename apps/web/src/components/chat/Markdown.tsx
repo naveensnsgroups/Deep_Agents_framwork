@@ -2,6 +2,7 @@ import { isValidElement, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Copy, CopyCheck } from "lucide-react";
+import { copyText } from "../../lib/browser";
 
 interface Props {
   content: string;
@@ -22,7 +23,7 @@ function CodeBlock({ children }: { children?: ReactNode }) {
   const text = nodeText(children);
 
   function copy() {
-    navigator.clipboard.writeText(text).then(() => {
+    copyText(text).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     });

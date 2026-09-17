@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Pencil, Check, X, SendHorizontal, Copy, CopyCheck, Square } from "lucide-react";
 import type { Decision, TimelineItem } from "../../types";
+import { copyText as writeClipboard } from "../../lib/browser";
 import { ToolCallCard } from "./ToolCallCard";
 import { ToolBlock } from "./ToolBlock";
 import { Markdown } from "./Markdown";
@@ -55,7 +56,7 @@ export function ChatPanel({ timeline, busy, streaming, projectRoot, onSend, onSt
   }
 
   function copyText(text: string, id: string) {
-    navigator.clipboard.writeText(text).then(() => {
+    writeClipboard(text).then(() => {
       setCopiedId(id);
       setTimeout(() => setCopiedId((cur) => (cur === id ? null : cur)), 1500);
     });

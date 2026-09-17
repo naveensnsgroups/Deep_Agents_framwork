@@ -12,11 +12,10 @@ import { SystemInfoPanel } from "./components/layout/SystemInfoPanel";
 import { ResizablePanels } from "./components/layout/ResizablePanels";
 import { AgentSocket, SERVER_URL } from "./lib/ws-client";
 import { apiFetch } from "./lib/auth";
+import { randomId } from "./lib/browser";
 import type { Decision, TimelineItem } from "./types";
 
-function uid() {
-  return crypto.randomUUID();
-}
+const uid = randomId;
 
 export default function App() {
   const [projectRoot, setProjectRoot] = useState<string | null>(null);
@@ -38,6 +37,10 @@ export default function App() {
   const [isGitWorkspace, setIsGitWorkspace] = useState(false);
   const [autoApproveNames, setAutoApproveNames] = useState<string[]>([]);
   const socketRef = useRef<AgentSocket | null>(null);
+  // The root the server resolved (a clone directory or `e2b://<id>`), which is what the file
+  // routes accept — not the URL typed into the picker. Read from socket handlers, whose
+  // closures would otherwise keep the typed value forever.
+  const resolvedRootRef = useRef<string | null>(null);
   const selectedPathRef = useRef<string | null>(null);
   const autoApproveRef = useRef<Set<string>>(new Set());
   // Counts human messages in arrival order so an edit can identify — and the backend can
@@ -87,6 +90,7 @@ export default function App() {
           // The server may have resolved a GitHub URL into a cloned directory on its own
           // disk — everything downstream (file tree, file reads, the terminal's cwd) needs
           // that real path, not whatever the user originally typed into the picker.
+          resolvedRootRef.current = msg.projectRoot;
           setProjectRoot(msg.projectRoot);
           loadTree(msg.projectRoot);
           break;
@@ -114,8 +118,10 @@ export default function App() {
         case "tool_call_result":
           setBusy(false);
           setTimeline((t) => [...t, { kind: "tool", id: uid(), results: msg.results }]);
-          loadTree(root);
-          if (selectedPathRef.current) loadFile(root, selectedPathRef.current);
+          if (resolvedRootRef.current) {
+            loadTree(resolvedRootRef.current);
+            if (selectedPathRef.current) loadFile(resolvedRootRef.current, selectedPathRef.current);
+          }
           break;
         case "interrupt_request": {
           setBusy(false);

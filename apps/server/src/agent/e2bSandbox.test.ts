@@ -1,13 +1,31 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const fakeSandbox = { sandboxId: "sbx-test", setTimeout: vi.fn(async () => {}), kill: vi.fn(async () => {}) };
+const { fakeSandbox, NotFoundError } = vi.hoisted(() => {
+  class NotFoundError extends Error {}
+  return {
+    NotFoundError,
+    fakeSandbox: {
+      sandboxId: "sbx-test",
+      setTimeout: vi.fn(async () => {}),
+      kill: vi.fn(async () => {}),
+      commands: { run: vi.fn(async (_cmd: string, _opts?: unknown) => ({ stdout: "", stderr: "", exitCode: 0 })) },
+      files: {
+        write: vi.fn(async (_path: string, _data: unknown) => {}),
+        read: vi.fn(async (_path: string, _opts?: unknown): Promise<unknown> => new TextEncoder().encode("contents")),
+      },
+    },
+  };
+});
 
 vi.mock("e2b", () => ({
   Sandbox: { create: vi.fn(async () => fakeSandbox) },
   CommandExitError: class extends Error {},
+  NotFoundError,
 }));
 
-const { E2BSandbox } = await import("./e2bSandbox.js");
+const { E2BSandbox, toSandboxPath, fromSandboxPath } = await import("./e2bSandbox.js");
+
+const ROOT = "/home/user/project";
 
 describe("E2BSandbox keep-alive", () => {
   beforeEach(() => {
@@ -38,5 +56,77 @@ describe("E2BSandbox keep-alive", () => {
 
     expect(fakeSandbox.setTimeout).not.toHaveBeenCalled();
     expect(fakeSandbox.kill).toHaveBeenCalledOnce();
+  });
+});
+
+describe("project path mapping", () => {
+  it.each([
+    ["/", ROOT],
+    ["/src/app.js", `${ROOT}/src/app.js`],
+    ["/src/", `${ROOT}/src/`],
+    ["./.deepagents/AGENTS.md", `${ROOT}/.deepagents/AGENTS.md`],
+    [".deepagents/AGENTS.md", `${ROOT}/.deepagents/AGENTS.md`],
+    [`${ROOT}/src/app.js`, `${ROOT}/src/app.js`],
+  ])("maps %s into the project", (virtualPath, expected) => {
+    expect(toSandboxPath(ROOT, virtualPath)).toBe(expected);
+  });
+
+  it.each([
+    [ROOT, "/"],
+    [`${ROOT}/src/app.js`, "/src/app.js"],
+    ["/etc/hosts", "/etc/hosts"],
+  ])("maps %s back to %s", (sandboxPath, expected) => {
+    expect(fromSandboxPath(ROOT, sandboxPath)).toBe(expected);
+  });
+
+  it("leaves paths untouched when no project directory is configured", () => {
+    expect(toSandboxPath(undefined, "/src/app.js")).toBe("/src/app.js");
+  });
+});
+
+describe("E2BSandbox file operations inside the project", () => {
+  beforeEach(() => {
+    fakeSandbox.commands.run.mockClear();
+    fakeSandbox.files.write.mockClear();
+    fakeSandbox.files.read.mockClear();
+  });
+
+  // Without mapping, the agent's `/src/app.js` went to the VM's filesystem root and the
+  // cloned repository was invisible to every file tool.
+  it("writes into the cloned repo and reports the project-relative path", async () => {
+    const sandbox = new E2BSandbox({ cwd: ROOT });
+    const result = await sandbox.write("/migrated/app.py", "print('hi')");
+
+    expect(fakeSandbox.files.write).toHaveBeenCalledWith(`${ROOT}/migrated/app.py`, expect.anything());
+    expect(result.path).toBe("/migrated/app.py");
+  });
+
+  it("reads project memory from the repo, not the sandbox user's home", async () => {
+    const sandbox = new E2BSandbox({ cwd: ROOT });
+    await sandbox.downloadFiles(["./.deepagents/AGENTS.md"]);
+
+    expect(fakeSandbox.files.read).toHaveBeenCalledWith(`${ROOT}/.deepagents/AGENTS.md`, { format: "bytes" });
+  });
+
+  it("searches inside the repo and returns project-relative match paths", async () => {
+    fakeSandbox.commands.run.mockResolvedValueOnce({ stdout: `${ROOT}/src/app.js:3:const hello = 1;`, stderr: "", exitCode: 0 });
+    const sandbox = new E2BSandbox({ cwd: ROOT });
+
+    const result = await sandbox.grep("hello", "/src");
+
+    expect(fakeSandbox.commands.run.mock.calls[0][0]).toContain(`${ROOT}/src`);
+    expect(result.matches).toEqual([{ path: "/src/app.js", line: 3, text: "const hello = 1;" }]);
+  });
+
+  // An absent optional file (like a project with no AGENTS.md) must read as "not found", which
+  // callers skip quietly — not as a failure.
+  it("reports E2B's typed missing-file error as file_not_found", async () => {
+    fakeSandbox.files.read.mockRejectedValueOnce(new NotFoundError("path does not exist"));
+    const sandbox = new E2BSandbox({ cwd: ROOT });
+
+    const [result] = await sandbox.downloadFiles(["/nope.md"]);
+
+    expect(result.error).toBe("file_not_found");
+    expect(result.path).toBe("/nope.md");
   });
 });
