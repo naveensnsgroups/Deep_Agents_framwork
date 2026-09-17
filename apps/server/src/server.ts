@@ -18,6 +18,8 @@ import { createChatWebSocketServer } from "./ws.js";
 import { createTerminalWebSocketServer } from "./terminal.js";
 import { assertAuthConfig, authorizeUpgrade, isAuthEnabled, localhostOnly, requireAuth } from "./auth.js";
 import { SYSTEM_PROMPT, SUBAGENT_INFO } from "./agent/index.js";
+import { closeAllSandboxSessions } from "./agent/sandboxSession.js";
+import { closePersistence } from "./agent/persistence.js";
 
 // Aborting a turn (the Stop button) races the Gemini SDK's own stream reader: when the
 // underlying fetch is cut off mid-read, @google/generative-ai throws from a tick that isn't
@@ -110,3 +112,31 @@ const PORT = Number(process.env.PORT ?? 4000);
 server.listen(PORT, () => {
   console.log(`Server listening on http://localhost:${PORT}`);
 });
+
+// ECS sends SIGTERM on every redeploy, then SIGKILL after its stop timeout (30s by default).
+// Node running as the container's PID 1 ignores SIGTERM unless a handler exists, so without
+// this every deploy waited the full 30s and was then killed — leaving E2B sandboxes billing
+// until their own idle timeout.
+const SHUTDOWN_DEADLINE_MS = 20_000;
+let shuttingDown = false;
+
+async function shutdown(signal: string) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`${signal} received — closing sandboxes and connections`);
+
+  server.close();
+  const deadline = new Promise<void>((resolve) => setTimeout(resolve, SHUTDOWN_DEADLINE_MS).unref());
+  // Sandboxes first and awaited: the sockets' own close handlers release them without waiting,
+  // which would lose the race against process.exit below.
+  await Promise.race([closeAllSandboxSessions(), deadline]);
+
+  for (const wss of [chatWss, terminalWss]) {
+    for (const ws of wss.clients) ws.close(1001, "Server shutting down");
+  }
+  await Promise.race([closePersistence(), deadline]);
+  process.exit(0);
+}
+
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));

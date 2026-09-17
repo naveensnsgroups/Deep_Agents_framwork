@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import {
   createDeepAgent,
   createSummarizationMiddleware,
@@ -10,7 +8,6 @@ import {
   type DeepAgent,
 } from "deepagents";
 import { todoListMiddleware, modelRetryMiddleware, toolRetryMiddleware, toolCallLimitMiddleware, modelFallbackMiddleware } from "langchain";
-import { SqliteSaver } from "@langchain/langgraph-checkpoint-sqlite";
 import type { MultiServerMCPClient } from "@langchain/mcp-adapters";
 import type { ModelId, WorkspaceOptions } from "@deepagents-ide/shared";
 import { resolveModel } from "./models.js";
@@ -22,7 +19,8 @@ import { migrationLedgerMiddleware } from "./ledger.js";
 import { scopeGuardrailMiddleware } from "./guardrails.js";
 import { secretRedactionMiddleware } from "./secretRedaction.js";
 import type { E2BSandbox } from "./e2bSandbox.js";
-import { DATA_DIR, SKILLS_DIR, SKILLS_MOUNT, MEMORIES_DIR, MEMORIES_MOUNT } from "./paths.js";
+import { SKILLS_DIR, SKILLS_MOUNT, MEMORIES_MOUNT } from "./paths.js";
+import { getPersistence } from "./persistence.js";
 
 export { SYSTEM_PROMPT, SUBAGENT_INFO };
 
@@ -33,12 +31,6 @@ export { SYSTEM_PROMPT, SUBAGENT_INFO };
  * the rest of the agent, so it's read relative to the opened workspace, not this repo.
  */
 const PROJECT_MEMORY_SOURCES = ["./.deepagents/AGENTS.md"];
-
-fs.mkdirSync(DATA_DIR, { recursive: true });
-fs.mkdirSync(MEMORIES_DIR, { recursive: true });
-
-/** Sessions survive server restarts — a long migration run is not lost on reload. */
-const checkpointer = SqliteSaver.fromConnString(path.join(DATA_DIR, "sessions.sqlite"));
 
 export interface WorkspaceAgent {
   agent: DeepAgent;
@@ -87,10 +79,12 @@ export async function createWorkspaceAgent(
   // once a run is actually in progress — so the whole backend is built as a factory
   // (deepagents' own default backend uses this exact same pattern) and resolved fresh by
   // whichever middleware needs it, rather than constructed once up front.
+  const persistence = await getPersistence();
+
   const backend = (runtime: unknown) =>
     new CompositeBackend(projectBackend, {
       [SKILLS_MOUNT]: new FilesystemBackend({ rootDir: SKILLS_DIR, virtualMode: true }),
-      [MEMORIES_MOUNT]: new FilesystemBackend({ rootDir: MEMORIES_DIR, virtualMode: true }),
+      [MEMORIES_MOUNT]: persistence.memories,
       // Cast: the exact BackendRuntime shape is deepagents' own internal type — this
       // factory only ever receives whatever it hands us, so trusting that value at the
       // boundary is enough without re-declaring its shape here.
@@ -109,8 +103,9 @@ export async function createWorkspaceAgent(
     tools: githubTools,
     systemPrompt: SYSTEM_PROMPT,
     middleware: [
-      // First in the list so it runs before anything else: an off-topic request is declined
-      // without a model call, so it costs nothing at all.
+      // deepagents places custom middleware after its own built-ins, so this is not literally
+      // first — but it is a beforeAgent hook, and every one of those runs before the first
+      // model call, so an off-topic request is still declined at no cost.
       scopeGuardrailMiddleware(),
       todoListMiddleware(),
       migrationLedgerMiddleware(),
@@ -140,23 +135,12 @@ export async function createWorkspaceAgent(
       toolCallLimitMiddleware({ runLimit: 150, exitBehavior: "end" }),
       ...(fallbacks.length > 0 ? [modelFallbackMiddleware(...(fallbacks as [string, ...string[]]))] : []),
     ],
-    // deepagents also auto-adds a `general-purpose` subagent alongside these. It cannot be
-    // removed here: `createDeepAgent` exposes no flag for it, declaring our own subagent by
-    // that name throws ("Duplicate subagent name"), and the harness-profile route that does
-    // control it resolves by model *spec string* — which never matches, because resolveModel
-    // hands back constructed model instances.
-    //
-    // It is not a hole in the approval gate: the framework gives it
-    // `humanInTheLoopMiddleware({ interruptOn: defaultInterruptOn })`, so its writes and
-    // shell commands stop for the same human decision as everything else (verified in the
-    // installed package source). What it does miss is our prompts — it runs on deepagents'
-    // stock subagent prompt, so none of the grounding rules or the instruction-source
-    // boundary in `_shared.md` apply to it. The system prompt therefore steers delegation to
-    // the specialists explicitly; see "Delegating to subagents" there.
+    // Includes our own `general-purpose` subagent, which replaces the framework's built-in
+    // one — see its spec in subagents.ts.
     subagents: migrationSubagents(backend, protectedPaths),
     skills: [SKILLS_MOUNT],
     memory: PROJECT_MEMORY_SOURCES,
-    checkpointer,
+    checkpointer: persistence.checkpointer,
     interruptOn: {
       write_file: writeInterrupt(autoApprovePaths, protectedPaths),
       edit_file: writeInterrupt(autoApprovePaths, protectedPaths),
@@ -173,6 +157,7 @@ export function runConfig(threadId: string) {
 }
 
 /** Wipes a project's checkpointed conversation so the next message starts genuinely fresh. */
-export function clearThread(threadId: string): Promise<void> {
-  return checkpointer.deleteThread(threadId);
+export async function clearThread(threadId: string): Promise<void> {
+  const { checkpointer } = await getPersistence();
+  await checkpointer.deleteThread(threadId);
 }

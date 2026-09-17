@@ -79,6 +79,16 @@ function loadSaved(): SavedSetup {
   }
 }
 
+/** A token pasted into a repo URL; the server refuses these, and they must not be saved here either. */
+function hasEmbeddedCredentials(value: string): boolean {
+  try {
+    const url = new URL(value.trim());
+    return url.username !== "" || url.password !== "";
+  } catch {
+    return false;
+  }
+}
+
 function saveSetup(setup: SavedSetup) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(setup));
@@ -153,7 +163,7 @@ export function WorkspacePicker({ onOpen }: Props) {
       options.readOnlyPaths = splitPaths(readOnly).map((p) => toRelativeGlob(p, projectRoot));
     if (githubToken.trim()) options.githubToken = githubToken.trim();
     saveSetup({
-      projectRoot: projectRoot.trim(),
+      projectRoot: hasEmbeddedCredentials(projectRoot) ? undefined : projectRoot.trim(),
       providerId,
       modelName: modelName.trim(),
       autoApprove: autoApprove.trim(),

@@ -147,6 +147,22 @@ because `execute` runs with the server process's privileges.
 E2B needs `E2B_API_KEY`. Outbound network from the sandbox is restricted to an allowlist
 (GitHub, npm, PyPI, Debian) — see `EGRESS_ALLOWLIST` in `apps/server/src/agent/e2bSandbox.ts`.
 
+### Where conversations are stored
+
+Chosen by `MONGODB_URI`:
+
+| | `MONGODB_URI` unset | `MONGODB_URI` set |
+| --- | --- | --- |
+| Chat history, todos, migration ledger | `apps/server/.data/sessions.sqlite` | MongoDB (`MONGODB_DB`, default `deepagents`) |
+| Agent `/memories/` | `apps/server/.data/memories/` | MongoDB, namespaced per user |
+| Survives container replacement (e.g. an ECS redeploy) | No | Yes |
+| Old data cleanup | Never | Checkpoints untouched for 30 days are deleted |
+
+Local SQLite is fine on a machine whose disk persists (your PC, an EC2 instance). Set
+`MONGODB_URI` for anything that replaces containers, such as ECS — otherwise every redeploy
+wipes the history. A free MongoDB Atlas M0 cluster (512 MB) is enough for testing; use a
+different `MONGODB_DB` per environment.
+
 ### Deploy the backend to EC2
 
 1. Launch an instance (`t3.micro` is free-tier eligible), attach an **Elastic IP** so the
@@ -218,6 +234,7 @@ needed, and you keep direct access to your real local folder (no git clone/push 
 - The access token is shared, not per-user: anyone holding it sees the same workspaces and the same conversation history. Cloned repos are keyed by repo URL and threads by path, so two people opening the same repo share one working directory and one conversation. Fine for a single operator; not yet a multi-user system.
 - The diff/merge editor for `write_file` treats the file's current on-disk content as "original"; if the agent's proposed write conflicts with edits you made in the Monaco editor tab that haven't round-tripped to disk, those in-editor changes won't be reflected in the diff.
 - `node-pty` is only used when `SANDBOX_PROVIDER` is unset; in sandbox mode the terminal is an E2B PTY and node-pty is not involved. Its prebuilt binary was verified on Windows (this project's dev environment) but not on a Linux host.
-- The SQLite checkpointer stores a full state snapshot per graph step, including file contents carried in the message history, and never prunes. A single long migration can grow `sessions.sqlite` into the hundreds of megabytes. Nothing breaks, but on a small disk it is worth watching — clearing a project's chat removes its checkpoints, and `VACUUM` (followed by `PRAGMA wal_checkpoint(TRUNCATE)`, or the reclaimed space just moves into the WAL) compacts the file.
+- An E2B sandbox is kept alive while its workspace is open, but E2B caps a sandbox's total lifetime by plan (1 hour on the free Hobby plan, 24 hours on Pro). A migration running longer than that loses its sandbox. Closing the browser tab also closes the sandbox immediately; reattaching after a refresh is not supported yet, because without per-user login there is no safe way to know the reconnecting person owns it.
+- The SQLite checkpointer (used when `MONGODB_URI` is unset) stores a full state snapshot per graph step, including file contents carried in the message history, and never prunes. A single long migration can grow `sessions.sqlite` into the hundreds of megabytes. Nothing breaks, but on a small disk it is worth watching — clearing a project's chat removes its checkpoints, and `VACUUM` (followed by `PRAGMA wal_checkpoint(TRUNCATE)`, or the reclaimed space just moves into the WAL) compacts the file.
 
-Chat history, todos, and the migration ledger persist to a SQLite checkpointer (`sessions.sqlite`) and are restored automatically when you reopen a project — they are not lost on server restart.
+Chat history, todos, and the migration ledger persist (to SQLite or MongoDB — see **Where conversations are stored**) and are restored automatically when you reopen a project.

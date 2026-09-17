@@ -3,8 +3,9 @@ import { randomUUID } from "node:crypto";
 import { Command, REMOVE_ALL_MESSAGES } from "@langchain/langgraph";
 import { RemoveMessage } from "@langchain/core/messages";
 import { createWorkspaceAgent, runConfig, clearThread, type WorkspaceAgent } from "./agent/index.js";
-import { isGitUrl, resolveGitWorkspace, pushWorkspace, cloneIntoSandbox, pushFromSandbox } from "./agent/gitWorkspace.js";
+import { isGitUrl, resolveGitWorkspace, pushWorkspace, cloneIntoSandbox, pushFromSandbox, assertNoEmbeddedCredentials } from "./agent/gitWorkspace.js";
 import { selectSubprotocol } from "./auth.js";
+import { keepAlive } from "./heartbeat.js";
 import { allowWorkspaceRoot } from "./workspaceRegistry.js";
 import type { E2BSandbox } from "./agent/e2bSandbox.js";
 import { isE2BEnabled, closeSandboxSession, createSandboxSession } from "./agent/sandboxSession.js";
@@ -453,6 +454,7 @@ async function replayHistory(ws: WebSocket, session: Session, threadId: string, 
  */
 export function createChatWebSocketServer() {
   const wss = new WebSocketServer({ noServer: true, handleProtocols: selectSubprotocol });
+  keepAlive(wss);
 
   wss.on("connection", (ws) => {
     const session: Session = { lastMessageCount: 0, toolCallArgs: new Map(), recentReads: [] };
@@ -479,6 +481,8 @@ export function createChatWebSocketServer() {
         }
 
         if (msg.type === "set_workspace") {
+          // Before anything derives a thread id from the input or boots a billed sandbox.
+          assertNoEmbeddedCredentials(msg.projectRoot);
           await session.workspaceAgent?.mcpClient?.close();
           session.githubToken = msg.options?.githubToken;
 
@@ -501,7 +505,13 @@ export function createChatWebSocketServer() {
             // server at all. `diskRoot` stops being a path here and becomes an `e2b://<id>`
             // handle that the file routes and terminal resolve back to this same sandbox.
             const created = await createSandboxSession();
-            await cloneIntoSandbox(created.sandbox, msg.projectRoot, session.githubToken);
+            try {
+              await cloneIntoSandbox(created.sandbox, msg.projectRoot, session.githubToken);
+            } catch (err) {
+              // Not yet attached to the session, so nothing else would ever close it.
+              await closeSandboxSession(created.root);
+              throw err;
+            }
             session.sandbox = created.sandbox;
             session.sandboxRoot = created.root;
             session.gitWorkspaceDir = created.root;

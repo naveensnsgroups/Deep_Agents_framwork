@@ -30,6 +30,15 @@ describe("skills", () => {
     expect(frontmatterOf(dir).name).toBe(dir);
   });
 
+  it.each(skillDirs)("%s frontmatter stays within the Agent Skills spec limits", (dir) => {
+    const fields = frontmatterOf(dir);
+    // Documented limits; a field past them can be truncated or rejected at load time.
+    expect(fields.name ?? "").toMatch(/^[a-z0-9]+(-[a-z0-9]+)*$/);
+    expect((fields.name ?? "").length).toBeLessThanOrEqual(64);
+    expect((fields.description ?? "").length).toBeLessThanOrEqual(1024);
+    if (fields.compatibility !== undefined) expect(fields.compatibility.length).toBeLessThanOrEqual(500);
+  });
+
   it.each(skillDirs)("%s has a description that says what and when", (dir) => {
     const description = frontmatterOf(dir).description ?? "";
     // The description is the only text in context at discovery, so it alone decides whether

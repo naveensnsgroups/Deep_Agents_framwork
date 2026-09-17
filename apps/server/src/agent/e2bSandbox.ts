@@ -32,6 +32,7 @@ export interface E2BSandboxOptions {
 }
 
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
+const KEEP_ALIVE_EVERY_MS = 5 * 60 * 1000;
 
 /**
  * Hosts the sandbox may reach. Everything else is refused.
@@ -69,6 +70,13 @@ export class E2BSandbox extends BaseSandbox {
   private sandbox?: Sandbox;
   /** Memoized so concurrent tool calls during one turn share a single boot, not one each. */
   private booting?: Promise<Sandbox>;
+  /**
+   * E2B's `timeoutMs` is a kill deadline fixed at creation, not an idle timer — activity does
+   * not extend it, only `setTimeout` does. Without this, every sandbox died a fixed 15 minutes
+   * after its workspace opened, mid-migration or not. If this process dies the refresh stops
+   * with it, so an orphaned sandbox is still reclaimed within one timeout.
+   */
+  private refresher?: ReturnType<typeof setInterval>;
 
   constructor(private readonly options: E2BSandboxOptions = {}) {
     super();
@@ -87,6 +95,9 @@ export class E2BSandbox extends BaseSandbox {
       },
     }).then((sandbox) => {
       this.sandbox = sandbox;
+      const timeoutMs = this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+      this.refresher = setInterval(() => void this.keepAlive(), Math.min(KEEP_ALIVE_EVERY_MS, timeoutMs / 3));
+      this.refresher.unref();
       return sandbox;
     });
     return this.booting;
@@ -109,7 +120,7 @@ export class E2BSandbox extends BaseSandbox {
     return this.sandbox?.sandboxId;
   }
 
-  /** Pushes the idle deadline out so a long migration isn't reclaimed mid-run. */
+  /** Moves the kill deadline to `timeoutMs` from now. Called on an interval once booted. */
   async keepAlive(timeoutMs = this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS): Promise<void> {
     await this.sandbox?.setTimeout(timeoutMs).catch(() => {
       // Sandbox already gone; the next operation will surface it more usefully than this.
@@ -173,6 +184,8 @@ export class E2BSandbox extends BaseSandbox {
 
   /** Ends the billed session. Nothing else reclaims it before the idle timeout. */
   async close(): Promise<void> {
+    clearInterval(this.refresher);
+    this.refresher = undefined;
     const sandbox = this.sandbox;
     this.sandbox = undefined;
     this.booting = undefined;

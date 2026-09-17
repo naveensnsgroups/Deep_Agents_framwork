@@ -220,6 +220,18 @@ function baseSpecs(): SubAgent[] {
         "Repairs the specific findings a verifier reported, re-runs the failing check, and confirms the fix. Use after verification fails rather than fixing in the main conversation.",
       systemPrompt: subagentPrompt("fixer.md"),
     },
+    {
+      // Supplying a subagent with this exact name makes createDeepAgent skip its built-in one
+      // (verified in deepagents 1.13.5 source). The built-in ran on the framework's stock
+      // prompt, so it was the one delegate without the instruction-source boundary in
+      // _shared.md. It still inherits the parent's tools and approval gate like any other
+      // isolated subagent; only skills have to be passed explicitly.
+      name: "general-purpose",
+      description:
+        "Handles a focused investigation or multi-step task that no specialist covers. Use only when the job is not conversion, config, test migration, verification, security review, fixing, or playbook authoring.",
+      systemPrompt: subagentPrompt("general-purpose.md"),
+      skills: [SKILLS_MOUNT],
+    },
   ];
 }
 

@@ -76,3 +76,8 @@ export async function closeSandboxSession(root: string): Promise<void> {
   sessions.delete(id);
   await sandbox?.close();
 }
+
+/** Closes every live sandbox and waits for all of them — used on process shutdown. */
+export async function closeAllSandboxSessions(): Promise<void> {
+  await Promise.all([...sessions.keys()].map((id) => closeSandboxSession(rootForSandboxId(id))));
+}

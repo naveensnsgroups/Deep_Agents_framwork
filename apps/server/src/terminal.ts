@@ -1,6 +1,7 @@
 import { WebSocketServer, WebSocket } from "ws";
 import * as pty from "node-pty";
 import { selectSubprotocol } from "./auth.js";
+import { keepAlive } from "./heartbeat.js";
 import { isWorkspaceRoot } from "./workspaceRegistry.js";
 import type { E2BSandbox } from "./agent/e2bSandbox.js";
 import { E2B_PROJECT_DIR, sandboxForRoot } from "./agent/sandboxSession.js";
@@ -120,6 +121,7 @@ function openSandboxPty(ws: WebSocket, sandbox: E2BSandbox, cols: number, rows: 
 
 export function createTerminalWebSocketServer() {
   const wss = new WebSocketServer({ noServer: true, handleProtocols: selectSubprotocol });
+  keepAlive(wss);
 
   wss.on("connection", (ws) => {
     let ptyProcess: pty.IPty | undefined;

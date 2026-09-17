@@ -15,7 +15,26 @@ export function isGitUrl(input: string): boolean {
   return /^https?:\/\//.test(trimmed) || trimmed.startsWith("git@") || trimmed.endsWith(".git");
 }
 
+/**
+ * A token pasted into the URL (`https://ghp_…@github.com/…`) would be written into the clone's
+ * `.git/config` — readable by the agent and anything injected into it — and would also become
+ * part of the stored thread id. Refused outright rather than stripped, so the user moves it to
+ * the token field instead of believing a credential-bearing URL is safe to keep using.
+ */
+export function assertNoEmbeddedCredentials(input: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(input.trim());
+  } catch {
+    return; // not a URL (a local path, or git@host:repo SSH form) — nothing to check
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error("The repository URL contains credentials. Remove them from the URL and enter the token in the GitHub token field instead.");
+  }
+}
+
 function parseGitTarget(input: string): { url: string; branch?: string } {
+  assertNoEmbeddedCredentials(input);
   const trimmed = input.trim();
   // "#branch" suffix, e.g. https://github.com/user/repo#feature-x — '#' can't otherwise
   // appear in a git remote URL, so this is unambiguous.

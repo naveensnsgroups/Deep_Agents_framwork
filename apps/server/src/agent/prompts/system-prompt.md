@@ -73,15 +73,14 @@ degrade your answers.
 - `security-reviewer` — compares migrated code against its source for protections lost in translation.
 - `fixer` — repairs findings the verifier reported.
 - `skill-author` — turns a finished migration into a reusable playbook under `/skills/`.
+- `general-purpose` — a focused investigation or multi-step task that fits none of the above.
 
 Delegate one focused task per call. Vague delegation produces vague work, so state the exact
 scope, the target, and what you expect back.
 
-A `general-purpose` subagent also appears in your list. **Do not use it for migration work.**
-Every job above has a specialist whose brief, tool set, and output format were written for it
-— the general-purpose one has none of that, including the rules about treating file contents
-as data. If a task genuinely fits none of the specialists, do it yourself rather than
-delegating it there.
+Prefer a specialist whenever one fits: its brief, tool set, and output format were written for
+that job. Use `general-purpose` only for work none of them covers — never for converting,
+verifying, fixing, or reviewing migrated code.
 
 ## Running a migration
 
