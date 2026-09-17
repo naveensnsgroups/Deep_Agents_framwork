@@ -69,7 +69,7 @@ aws iam add-role-to-instance-profile --instance-profile-name deepAgentsEcsInstan
 
 # 3c. GitHub OIDC provider + deploy role, trusted only for pushes to the aws branch of this repo.
 aws iam create-open-id-connect-provider --url https://token.actions.githubusercontent.com --client-id-list sts.amazonaws.com
-aws iam create-role --role-name deepAgentsGithubDeployRole --assume-role-policy-document "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Federated\":\"arn:aws:iam::$ACCOUNT:oidc-provider/token.actions.githubusercontent.com\"},\"Action\":\"sts:AssumeRoleWithWebIdentity\",\"Condition\":{\"StringEquals\":{\"token.actions.githubusercontent.com:aud\":\"sts.amazonaws.com\",\"token.actions.githubusercontent.com:sub\":\"repo:$REPO:ref:refs/heads/aws\"}}}]}"
+aws iam create-role --role-name deepAgentsGithubDeployRole --assume-role-policy-document "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Federated\":\"arn:aws:iam::$ACCOUNT:oidc-provider/token.actions.githubusercontent.com\"},\"Action\":\"sts:AssumeRoleWithWebIdentity\",\"Condition\":{\"StringEquals\":{\"token.actions.githubusercontent.com:aud\":\"sts.amazonaws.com\",\"token.actions.githubusercontent.com:sub\":\"repo:naveensnsgroups@186386913/Deep_Agents_framwork@1363485819:ref:refs/heads/aws\"}}}]}"
 aws iam put-role-policy --role-name deepAgentsGithubDeployRole --policy-name deploy-deep-agents --policy-document "{\"Version\":\"2012-10-17\",\"Statement\":[
   {\"Effect\":\"Allow\",\"Action\":\"ecr:GetAuthorizationToken\",\"Resource\":\"*\"},
   {\"Effect\":\"Allow\",\"Action\":[\"ecr:BatchCheckLayerAvailability\",\"ecr:BatchGetImage\",\"ecr:GetDownloadUrlForLayer\",\"ecr:InitiateLayerUpload\",\"ecr:UploadLayerPart\",\"ecr:CompleteLayerUpload\",\"ecr:PutImage\"],\"Resource\":\"arn:aws:ecr:ap-south-1:$ACCOUNT:repository/deep-agents-app\"},
@@ -81,6 +81,11 @@ echo "AWS_DEPLOY_ROLE_ARN = arn:aws:iam::$ACCOUNT:role/deepAgentsGithubDeployRol
 ```
 
 If `create-open-id-connect-provider` says it already exists, that's fine — continue.
+
+The trust policy's `sub` uses GitHub's immutable-ID format (`owner@ownerId/repo@repoId`), which is
+what this repo's OIDC tokens carry. The console's "Web identity → GitHub" wizard writes the older
+`repo:owner/repo:...` form, which never matches — AWS then rejects the login with
+`Not authorized to perform sts:AssumeRoleWithWebIdentity`.
 
 ### 4. Attach the instance role to the EC2 host
 
