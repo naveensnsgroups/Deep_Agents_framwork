@@ -1,9 +1,7 @@
-import { useCallback, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useRef, useState } from "react";
 import type { FileNode, LedgerEntry, ModelId, Todo, WorkspaceOptions } from "@deepagents-ide/shared";
 import { WorkspacePicker } from "./components/workspace/WorkspacePicker";
 import { FileTree } from "./components/editor/FileTree";
-import { Editor } from "./components/editor/Editor";
-import { TerminalPanel } from "./components/terminal/TerminalPanel";
 import { ChatPanel } from "./components/chat/ChatPanel";
 import { TodoPanel } from "./components/chat/TodoPanel";
 import { LedgerPanel } from "./components/chat/LedgerPanel";
@@ -16,6 +14,11 @@ import { randomId } from "./lib/browser";
 import type { Decision, TimelineItem } from "./types";
 
 const uid = randomId;
+
+// Monaco and xterm are most of the bundle, and neither is needed to log in or pick a
+// workspace — loading them up front made the first screen wait for code it never used.
+const Editor = lazy(() => import("./components/editor/Editor").then((m) => ({ default: m.Editor })));
+const TerminalPanel = lazy(() => import("./components/terminal/TerminalPanel").then((m) => ({ default: m.TerminalPanel })));
 
 export default function App() {
   const [projectRoot, setProjectRoot] = useState<string | null>(null);
@@ -260,11 +263,15 @@ export default function App() {
         editor={
           <div className="flex h-full min-h-0 flex-col">
             <div className="min-h-0 flex-1">
-              <Editor path={selectedPath} content={fileContent} onClose={handleCloseFile} />
+              <Suspense fallback={<div className="p-5 text-neutral-500">Loading editor…</div>}>
+                <Editor path={selectedPath} content={fileContent} onClose={handleCloseFile} />
+              </Suspense>
             </div>
             {terminalOpen && (
               <div className="h-64 max-h-[70vh] min-h-[120px] flex-none resize-y overflow-hidden">
-                <TerminalPanel projectRoot={projectRoot} onClose={() => setTerminalOpen(false)} />
+                <Suspense fallback={<div className="p-2 text-xs text-neutral-500">Loading terminal…</div>}>
+                  <TerminalPanel projectRoot={projectRoot} onClose={() => setTerminalOpen(false)} />
+                </Suspense>
               </div>
             )}
           </div>

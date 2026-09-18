@@ -10,7 +10,7 @@ import {
 import { todoListMiddleware, modelRetryMiddleware, toolRetryMiddleware, toolCallLimitMiddleware, modelFallbackMiddleware } from "langchain";
 import type { MultiServerMCPClient } from "@langchain/mcp-adapters";
 import type { ModelId, WorkspaceOptions } from "@deepagents-ide/shared";
-import { resolveModel } from "./models.js";
+import { providerOf, resolveModel } from "./models.js";
 import { migrationSubagents, SUBAGENT_INFO } from "./subagents.js";
 import { writeInterrupt } from "./permissions.js";
 import { connectGithubTools } from "./github.js";
@@ -39,12 +39,22 @@ export interface WorkspaceAgent {
   githubToolCount: number;
 }
 
+/**
+ * Which model keys a workspace may use. Under GitHub login `allowServerKeys` is false and
+ * `providerKeys` holds the user's own keys, one per provider id.
+ */
+export interface ModelCredentials {
+  allowServerKeys: boolean;
+  providerKeys: Record<string, string | undefined>;
+}
+
 export async function createWorkspaceAgent(
   projectRoot: string,
   model: ModelId,
   threadId: string,
   options: WorkspaceOptions = {},
-  sandbox?: E2BSandbox
+  sandbox?: E2BSandbox,
+  credentials: ModelCredentials = { allowServerKeys: true, providerKeys: {} }
 ): Promise<WorkspaceAgent> {
   // With a sandbox, every file operation and shell command the agent makes happens in a
   // disposable microVM instead of on this host. deepagents' own documentation says
@@ -94,11 +104,21 @@ export async function createWorkspaceAgent(
 
   const autoApprovePaths = options.autoApprovePaths ?? [];
   const protectedPaths = options.readOnlyPaths ?? [];
-  const fallbacks = options.fallbackModels ?? [];
+  // Fallback ids given as plain strings are resolved by LangChain from the server's environment,
+  // so without server keys each one is built with the user's own key instead — and a fallback
+  // for a provider the user has no key for is dropped rather than silently billed to the server.
+  const fallbacks = (options.fallbackModels ?? []).flatMap((fallback) => {
+    if (credentials.allowServerKeys) return [fallback];
+    try {
+      return [resolveModel(fallback, credentials.providerKeys[providerOf(fallback)], false)];
+    } catch {
+      return [];
+    }
+  });
   const { tools: githubTools, client: mcpClient } = await connectGithubTools(options.githubToken);
 
   const agent = createDeepAgent({
-    model: resolveModel(model, options.apiKey),
+    model: resolveModel(model, options.apiKey ?? credentials.providerKeys[providerOf(model)], credentials.allowServerKeys),
     backend,
     tools: githubTools,
     systemPrompt: SYSTEM_PROMPT,
@@ -133,7 +153,7 @@ export async function createWorkspaceAgent(
       // A migration run loops over many files; this stops a stuck agent from
       // burning the whole budget on a retry loop rather than failing loudly.
       toolCallLimitMiddleware({ runLimit: 150, exitBehavior: "end" }),
-      ...(fallbacks.length > 0 ? [modelFallbackMiddleware(...(fallbacks as [string, ...string[]]))] : []),
+      ...(fallbacks.length > 0 ? [modelFallbackMiddleware(...(fallbacks as Parameters<typeof modelFallbackMiddleware>))] : []),
     ],
     // Includes our own `general-purpose` subagent, which replaces the framework's built-in
     // one — see its spec in subagents.ts.
@@ -152,8 +172,12 @@ export async function createWorkspaceAgent(
   return { agent, threadId, mcpClient, githubToolCount: githubTools.length };
 }
 
-export function runConfig(threadId: string) {
-  return { configurable: { thread_id: threadId } };
+/**
+ * `user_id` scopes /memories/ to the signed-in user (see persistence.ts). Left out when there are
+ * no separate accounts, so everything keeps using the one shared namespace it always had.
+ */
+export function runConfig(threadId: string, userId?: string) {
+  return { configurable: userId ? { thread_id: threadId, user_id: userId } : { thread_id: threadId } };
 }
 
 /** Wipes a project's checkpointed conversation so the next message starts genuinely fresh. */

@@ -3,6 +3,8 @@ import type { ModelId, ProviderOption, WorkspaceOptions } from "@deepagents-ide/
 import { SERVER_URL } from "../../lib/ws-client";
 import { apiFetch } from "../../lib/auth";
 import { FolderBrowserModal } from "./FolderBrowserModal";
+import { UserMenu } from "../auth/UserMenu";
+import { useSession } from "../../lib/session";
 
 interface Props {
   onOpen: (projectRoot: string, model: ModelId, options: WorkspaceOptions) => void;
@@ -98,6 +100,8 @@ function saveSetup(setup: SavedSetup) {
 }
 
 export function WorkspacePicker({ onOpen }: Props) {
+  const { authMode } = useSession();
+  const signedIn = authMode === "oauth";
   const [projectRoot, setProjectRoot] = useState(() => loadSaved().projectRoot ?? "");
   const [providers, setProviders] = useState<ProviderOption[]>([]);
   const [providerId, setProviderId] = useState("");
@@ -109,24 +113,30 @@ export function WorkspacePicker({ onOpen }: Props) {
   const [githubToken, setGithubToken] = useState("");
   const [browseTarget, setBrowseTarget] = useState<BrowseTarget>(null);
 
+  // Re-run after "My keys" changes, so a key saved there immediately counts as available here.
+  const [keysVersion, setKeysVersion] = useState(0);
+
   useEffect(() => {
     apiFetch(`${SERVER_URL}/api/providers`)
       .then((res) => res.json())
       .then((data: { providers: ProviderOption[] }) => {
         setProviders(data.providers);
+        // Only choose a provider on first load; a refresh after saving a key keeps the selection.
+        if (keysVersion > 0) return;
         const saved = loadSaved();
         const restored = saved.providerId ? data.providers.find((p) => p.id === saved.providerId) : undefined;
-        const preferred = restored ?? data.providers.find((p) => p.serverKey) ?? data.providers[0];
+        const preferred = restored ?? data.providers.find((p) => p.serverKey || p.userKey) ?? data.providers[0];
         if (preferred) {
           setProviderId(preferred.id);
           setModelName((restored && saved.modelName) || preferred.defaultModel);
         }
       })
       .catch(() => setProviders([]));
-  }, []);
+  }, [keysVersion]);
 
   const provider = providers.find((p) => p.id === providerId);
-  const needsKey = provider != null && !provider.serverKey && !apiKey.trim();
+  const hasStoredKey = provider != null && (provider.serverKey || provider.userKey === true);
+  const needsKey = provider != null && !hasStoredKey && !apiKey.trim();
   const canOpen = projectRoot.trim() !== "" && modelName.trim() !== "" && providerId !== "" && !needsKey;
 
   function handleProviderChange(id: string) {
@@ -175,7 +185,10 @@ export function WorkspacePicker({ onOpen }: Props) {
   return (
     <div className="flex h-screen items-center justify-center overflow-y-auto px-5 py-6">
       <div className="flex w-full max-w-[520px] flex-col gap-3">
-      <h1 className="text-2xl font-bold text-neutral-100">Code Migration Agents</h1>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h1 className="text-2xl font-bold text-neutral-100">Code Migration Agents</h1>
+        <UserMenu onKeysChanged={() => setKeysVersion((v) => v + 1)} />
+      </div>
 
       <label className={labelClass}>Project folder or GitHub repo</label>
       <div className="flex gap-2">
@@ -204,7 +217,7 @@ export function WorkspacePicker({ onOpen }: Props) {
         {providers.map((p) => (
           <option key={p.id} value={p.id}>
             {p.label}
-            {p.serverKey ? " — key on server" : ""}
+            {p.serverKey ? " — key on server" : p.userKey ? " — your saved key" : ""}
           </option>
         ))}
       </select>
@@ -219,7 +232,14 @@ export function WorkspacePicker({ onOpen }: Props) {
       />
 
       <label className={labelClass}>
-        API key {provider?.serverKey ? "(optional — server key will be used)" : "(required)"}
+        API key{" "}
+        {provider?.serverKey
+          ? "(optional — server key will be used)"
+          : provider?.userKey
+            ? "(optional — your saved key will be used)"
+            : signedIn
+              ? "(required — or save it in My keys)"
+              : "(required)"}
       </label>
       <input
         type="password"
@@ -292,7 +312,7 @@ export function WorkspacePicker({ onOpen }: Props) {
             commands always require approval regardless.
           </p>
 
-          <label className={labelClass}>GitHub Personal Access Token (optional)</label>
+          <label className={labelClass}>GitHub Personal Access Token (optional{signedIn ? " — your GitHub login already covers clone and push" : ""})</label>
           <input
             type="password"
             placeholder="ghp_… or github_pat_…"

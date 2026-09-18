@@ -11,6 +11,7 @@ it out to ECS. The app stays at the instance's Elastic IP (`http://13.202.56.144
 | Task definition family | `deep-agents-task` ([task-definition.json](task-definition.json)) |
 | Container host | EC2 `deep-agents-app` (`i-0ed7a15e29db1b8bc`) |
 | Secrets | SSM Parameter Store, `/deep-agents/*` (SecureString) |
+| Sign-in | GitHub OAuth App; allowed users in `ALLOWED_GITHUB_USERS` |
 | Logs | CloudWatch `/ecs/deep-agents-app` (7-day retention) |
 | GitHub → AWS | OIDC role `deepAgentsGithubDeployRole`, repo secret `AWS_DEPLOY_ROLE_ARN` |
 
@@ -35,20 +36,33 @@ aws ecs create-cluster --cluster-name deep-agents-cluster
 
 ### 2. Secrets
 
-Prompts for each value with input hidden, so nothing lands in shell history or on screen.
-Copy the values from `.env.production` on the EC2 host.
+The app signs users in with GitHub, so first create a **GitHub OAuth App** at
+<https://github.com/settings/developers> → **OAuth Apps** → **New OAuth App**:
+
+| Field | Value |
+|---|---|
+| Homepage URL | `http://13.202.56.144` (must match `PUBLIC_URL` in the task definition) |
+| Authorization callback URL | `http://13.202.56.144/auth/github/callback` |
+
+Then generate a client secret on the app's page. Prompts below hide input, so nothing lands in
+shell history or on screen. `APP_SECRET` is any random 64-character hex string, e.g. from
+`node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
 
 ```bash
-for name in AUTH_TOKEN GOOGLE_API_KEY OPENROUTER_API_KEY E2B_API_KEY MONGODB_URI; do
+for name in GITHUB_OAUTH_CLIENT_ID GITHUB_OAUTH_CLIENT_SECRET APP_SECRET E2B_API_KEY MONGODB_URI; do
   read -rsp "$name: " value; echo
   aws ssm put-parameter --name "/deep-agents/$name" --type SecureString --value "$value" --overwrite > /dev/null && echo "  saved"
 done
 unset value
 ```
 
-Every parameter listed in the task definition must exist, or the task fails to start. To add
-another key later (e.g. `ANTHROPIC_API_KEY`), create its parameter and add a matching entry
-under `secrets` in `task-definition.json`.
+Every parameter listed in the task definition must exist, or the task fails to start (and the
+deploy rolls back). Model API keys are **not** stored here: each user saves their own in
+**My keys**, and the server's keys are never used for them.
+
+Who may sign in is `ALLOWED_GITHUB_USERS` in `task-definition.json` (comma-separated GitHub
+usernames) — edit and push to add someone. Rotating `APP_SECRET` signs everyone out and makes
+saved keys unreadable, so users would have to save them again.
 
 ### 3. IAM roles
 
@@ -146,5 +160,6 @@ open `http://13.202.56.144`.
 - **Stop the server (save money):** EC2 → Stop instance. On Start, the ECS agent comes back up and ECS restarts the task by itself; the Elastic IP stays the same.
 - **Change a secret:** re-run step 2 for that name, then force a new task:
   `aws ecs update-service --cluster deep-agents-cluster --service deep-agents-service --force-new-deployment`
-- **Change a non-secret setting** (`ALLOWED_ORIGINS`, model names): edit `task-definition.json` and push.
+- **Change a non-secret setting** (`ALLOWED_GITHUB_USERS`, `ALLOWED_ORIGINS`, model names): edit `task-definition.json` and push.
+- **Sandboxes across deploys:** a deploy detaches running E2B sandboxes instead of killing them, so users reconnect to the same one (edits intact) after the ~1 minute restart. One nobody returns to within 10 minutes is reclaimed by E2B.
 - **Failed deploy:** the circuit breaker rolls back to the previous revision automatically; the logs command above shows why the new one failed.

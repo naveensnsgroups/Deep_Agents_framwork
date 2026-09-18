@@ -2,13 +2,14 @@ import { WebSocketServer, WebSocket } from "ws";
 import { randomUUID } from "node:crypto";
 import { Command, REMOVE_ALL_MESSAGES } from "@langchain/langgraph";
 import { RemoveMessage } from "@langchain/core/messages";
-import { createWorkspaceAgent, runConfig, clearThread, type WorkspaceAgent } from "./agent/index.js";
+import { createWorkspaceAgent, runConfig, clearThread, type ModelCredentials, type WorkspaceAgent } from "./agent/index.js";
 import { isGitUrl, resolveGitWorkspace, pushWorkspace, cloneIntoSandbox, pushFromSandbox, assertNoEmbeddedCredentials } from "./agent/gitWorkspace.js";
-import { selectSubprotocol } from "./auth.js";
+import { selectSubprotocol, userForUpgrade, userScope } from "./auth.js";
 import { keepAlive } from "./heartbeat.js";
 import { allowWorkspaceRoot } from "./workspaceRegistry.js";
 import type { E2BSandbox } from "./agent/e2bSandbox.js";
-import { isE2BEnabled, closeSandboxSession, createSandboxSession } from "./agent/sandboxSession.js";
+import { acquireSandbox, isE2BEnabled, releaseSandbox } from "./agent/sandboxSession.js";
+import { GITHUB_OAUTH_SECRET, getUserSecret, USER_KEYS } from "./userSecrets.js";
 import { isReadTool, readTargetOf, scanForAgentDirectedText } from "./agent/injectionSignals.js";
 import type {
   ClientToServerMessage,
@@ -18,9 +19,15 @@ import type {
   Todo,
   LedgerEntry,
   ReadProvenance,
+  SessionUser,
+  WorkspaceOptions,
 } from "@deepagents-ide/shared";
 
 interface Session {
+  /** Who this connection belongs to — fixed at the handshake. */
+  user: SessionUser;
+  /** The id data is scoped to, or undefined when there are no separate accounts. See userScope. */
+  scope?: string;
   workspaceAgent?: WorkspaceAgent;
   lastMessageCount: number;
   toolCallArgs: Map<string, Record<string, unknown>>;
@@ -84,9 +91,46 @@ function sleep(ms: number) {
  * thread despite being two different projects, so one would open with the other's history
  * and migration ledger.
  */
-function threadIdForProject(projectRoot: string): string {
+function projectKeyFor(projectRoot: string): string {
   const normalized = projectRoot.trim().replace(/\\/g, "/").replace(/\/+$/, "");
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+/**
+ * Under GitHub login the thread is also keyed by the user, so two people opening the same repo
+ * each get their own conversation and migration ledger instead of reading each other's.
+ */
+function threadIdForProject(projectRoot: string, scope?: string): string {
+  const key = projectKeyFor(projectRoot);
+  return scope ? `user:${scope}:${key}` : key;
+}
+
+/**
+ * The keys a workspace runs on. Under GitHub login these come only from what the user supplied —
+ * typed for this session, or saved in "My keys" — and never from the server's environment.
+ * GitHub access for clone and push prefers a personal access token and otherwise uses the token
+ * GitHub login granted; the GitHub MCP tools only ever get a token the user supplied themselves,
+ * since they act on far more than the one repository being opened.
+ */
+async function resolveCredentials(
+  session: Session,
+  options: WorkspaceOptions
+): Promise<{ credentials: ModelCredentials; gitToken?: string; mcpToken?: string }> {
+  if (!session.scope) {
+    return { credentials: { allowServerKeys: true, providerKeys: {} }, gitToken: options.githubToken, mcpToken: options.githubToken };
+  }
+
+  const userId = session.user.id;
+  const providerKeys: Record<string, string | undefined> = {};
+  for (const { name } of USER_KEYS) {
+    if (name !== "github") providerKeys[name] = await getUserSecret(userId, name);
+  }
+  const personalToken = options.githubToken || (await getUserSecret(userId, "github"));
+  return {
+    credentials: { allowServerKeys: false, providerKeys },
+    gitToken: personalToken || (await getUserSecret(userId, GITHUB_OAUTH_SECRET)),
+    mcpToken: personalToken,
+  };
 }
 
 interface LcMessage {
@@ -415,7 +459,7 @@ interface StateSnapshotLike {
 async function replayHistory(ws: WebSocket, session: Session, threadId: string, agent: WorkspaceAgent["agent"]) {
   let snapshot: StateSnapshotLike;
   try {
-    snapshot = (await agent.getState(runConfig(threadId))) as unknown as StateSnapshotLike;
+    snapshot = (await agent.getState(runConfig(threadId, session.scope))) as unknown as StateSnapshotLike;
   } catch {
     return; // no checkpoint yet for this project — nothing to replay
   }
@@ -456,13 +500,15 @@ export function createChatWebSocketServer() {
   const wss = new WebSocketServer({ noServer: true, handleProtocols: selectSubprotocol });
   keepAlive(wss);
 
-  wss.on("connection", (ws) => {
-    const session: Session = { lastMessageCount: 0, toolCallArgs: new Map(), recentReads: [] };
+  wss.on("connection", (ws, request) => {
+    const user = userForUpgrade(request);
+    const session: Session = { user, scope: userScope(user), lastMessageCount: 0, toolCallArgs: new Map(), recentReads: [] };
 
     ws.on("close", () => {
       session.workspaceAgent?.mcpClient?.close();
-      // Releases the microVM rather than leaving it billing until its idle timeout.
-      if (session.sandboxRoot) void closeSandboxSession(session.sandboxRoot);
+      // Kept alive for a grace period rather than killed, so a reload reconnects to it; killed
+      // after that rather than billing until E2B's own timeout. See releaseSandbox.
+      if (session.sandboxRoot) releaseSandbox(session.sandboxRoot);
     });
 
     ws.on("message", async (raw) => {
@@ -484,19 +530,22 @@ export function createChatWebSocketServer() {
           // Before anything derives a thread id from the input or boots a billed sandbox.
           assertNoEmbeddedCredentials(msg.projectRoot);
           await session.workspaceAgent?.mcpClient?.close();
-          session.githubToken = msg.options?.githubToken;
+          const options = msg.options ?? {};
+          const { credentials, gitToken, mcpToken } = await resolveCredentials(session, options);
+          session.githubToken = gitToken;
 
           // Identity (thread id) stays keyed by whatever the user typed — a repo URL or a
           // local path — so reopening the same one resumes the same conversation. The
           // *disk* root the backend actually operates on is a separate concern: for a git
           // URL there's no local folder to point at, so one gets created by cloning.
-          const threadId = threadIdForProject(msg.projectRoot);
+          const threadId = threadIdForProject(msg.projectRoot, session.scope);
 
-          // Replacing a workspace releases the previous sandbox — E2B bills per running hour
-          // and would otherwise hold it until the idle timeout.
-          if (session.sandboxRoot) await closeSandboxSession(session.sandboxRoot);
+          // Switching projects hands the previous sandbox back rather than killing it outright —
+          // switching back within the grace period finds it still there.
+          if (session.sandboxRoot) releaseSandbox(session.sandboxRoot);
           session.sandbox = undefined;
           session.sandboxRoot = undefined;
+          session.workspaceAgent = undefined;
 
           let diskRoot = msg.projectRoot;
 
@@ -504,20 +553,18 @@ export function createChatWebSocketServer() {
             // The repository is cloned straight into the microVM, so it never lands on this
             // server at all. `diskRoot` stops being a path here and becomes an `e2b://<id>`
             // handle that the file routes and terminal resolve back to this same sandbox.
-            const created = await createSandboxSession();
-            try {
-              await cloneIntoSandbox(created.sandbox, msg.projectRoot, session.githubToken);
-            } catch (err) {
-              // Not yet attached to the session, so nothing else would ever close it.
-              await closeSandboxSession(created.root);
-              throw err;
-            }
-            session.sandbox = created.sandbox;
-            session.sandboxRoot = created.root;
-            session.gitWorkspaceDir = created.root;
-            diskRoot = created.root;
+            // A sandbox this user already has for this project is reused, edits and all.
+            const acquired = await acquireSandbox({
+              owner: user.id,
+              projectKey: projectKeyFor(msg.projectRoot),
+              prepare: (sandbox) => cloneIntoSandbox(sandbox, msg.projectRoot, gitToken),
+            });
+            session.sandbox = acquired.sandbox;
+            session.sandboxRoot = acquired.root;
+            session.gitWorkspaceDir = acquired.root;
+            diskRoot = acquired.root;
           } else if (isGitUrl(msg.projectRoot)) {
-            diskRoot = await resolveGitWorkspace(msg.projectRoot, session.githubToken);
+            diskRoot = await resolveGitWorkspace(msg.projectRoot, gitToken, session.scope);
             session.gitWorkspaceDir = diskRoot;
           } else {
             session.gitWorkspaceDir = undefined;
@@ -527,15 +574,24 @@ export function createChatWebSocketServer() {
           // openable as a terminal — both validate against the registry instead of trusting
           // whatever root a request carries. Registering the *resolved* value so those
           // comparisons match regardless of how the client spells it back.
-          diskRoot = session.sandboxRoot ?? allowWorkspaceRoot(diskRoot);
+          diskRoot = session.sandboxRoot ?? allowWorkspaceRoot(diskRoot, user.id);
 
-          session.workspaceAgent = await createWorkspaceAgent(
-            diskRoot,
-            msg.model,
-            threadId,
-            msg.options,
-            session.sandbox
-          );
+          try {
+            session.workspaceAgent = await createWorkspaceAgent(
+              diskRoot,
+              msg.model,
+              threadId,
+              { ...options, githubToken: mcpToken },
+              session.sandbox,
+              credentials
+            );
+          } catch (err) {
+            // No agent will use this sandbox, so it shouldn't be held beyond the grace period.
+            if (session.sandboxRoot) releaseSandbox(session.sandboxRoot);
+            session.sandbox = undefined;
+            session.sandboxRoot = undefined;
+            throw err;
+          }
           session.lastMessageCount = 0;
           session.toolCallArgs.clear();
           send(ws, {
@@ -569,7 +625,7 @@ export function createChatWebSocketServer() {
         }
 
         const { agent, threadId } = session.workspaceAgent;
-        const config = runConfig(threadId);
+        const config = runConfig(threadId, session.scope);
 
         if (msg.type === "user_message") {
           send(ws, { type: "agent_thinking" });

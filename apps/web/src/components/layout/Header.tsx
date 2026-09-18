@@ -1,4 +1,5 @@
 import { MessageSquarePlus, SquareTerminal, UploadCloud } from "lucide-react";
+import { UserMenu } from "../auth/UserMenu";
 
 interface Props {
   projectRoot: string;
@@ -94,6 +95,7 @@ export function Header({
         >
           System
         </button>
+        <UserMenu />
       </div>
     </div>
   );

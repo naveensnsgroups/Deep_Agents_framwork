@@ -1,14 +1,16 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import { AlertTriangle, Check, ChevronDown, ChevronRight, Pencil, ShieldCheck, X } from "lucide-react";
 import type { ActionRequest, ReadProvenance, ReviewConfig } from "@deepagents-ide/shared";
 import type { Decision } from "../../types";
 import { ToolIcon } from "../../lib/toolIcons";
 import { ToolActionBody } from "./ToolActionBody";
-import { DiffMergeEditor } from "./DiffMergeEditor";
 import { SERVER_URL } from "../../lib/ws-client";
 import { apiFetch } from "../../lib/auth";
 import { fileNameOf } from "../../lib/fileTypes";
 import { ProvenancePanel } from "./ProvenancePanel";
+
+// Only opened when a reviewer edits a pending write, so Monaco stays out of the chat's own load.
+const DiffMergeEditor = lazy(() => import("./DiffMergeEditor").then((m) => ({ default: m.DiffMergeEditor })));
 
 interface Props {
   actionRequests: ActionRequest[];
@@ -147,12 +149,14 @@ export function ToolCallCard({ actionRequests, reviewConfigs, provenance, resolv
             {action.name}
           </div>
           {editing && singleAction === action && diffDraft ? (
-            <DiffMergeEditor
-              original={diffDraft.original}
-              modified={diffDraft.modified}
-              language={diffDraft.language}
-              onChange={(modified) => setDiffDraft((d) => (d ? { ...d, modified } : d))}
-            />
+            <Suspense fallback={<div className="h-56 rounded border border-amber-800 p-2 text-xs text-neutral-500">Loading diff…</div>}>
+              <DiffMergeEditor
+                original={diffDraft.original}
+                modified={diffDraft.modified}
+                language={diffDraft.language}
+                onChange={(modified) => setDiffDraft((d) => (d ? { ...d, modified } : d))}
+              />
+            </Suspense>
           ) : editing && singleAction === action ? (
             <textarea
               value={draftArgs}

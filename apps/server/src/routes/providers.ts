@@ -1,5 +1,7 @@
 import { Router } from "express";
 import type { ProviderOption } from "@deepagents-ide/shared";
+import { authMode, currentUser } from "../auth.js";
+import { listUserKeys } from "../userSecrets.js";
 
 /**
  * Default model names are suggestions the UI pre-fills — the user can type any model
@@ -9,7 +11,7 @@ import type { ProviderOption } from "@deepagents-ide/shared";
 export function providersRouter() {
   const router = Router();
 
-  router.get("/providers", (_req, res) => {
+  router.get("/providers", async (_req, res) => {
     const providers: ProviderOption[] = [
       {
         id: "anthropic",
@@ -42,6 +44,15 @@ export function providersRouter() {
         keyPlaceholder: "sk-or-…",
       },
     ];
+    // Under GitHub login the server's own keys are never used for anyone, so they are not
+    // offered; what matters instead is whether this user has saved their own.
+    if (authMode() === "oauth") {
+      const { keys } = await listUserKeys(currentUser(res).id);
+      for (const provider of providers) {
+        provider.serverKey = false;
+        provider.userKey = keys.some((k) => k.name === provider.id && k.saved);
+      }
+    }
     res.json({ providers });
   });
 

@@ -1,33 +1,212 @@
-# Deep Agents IDE
+# Code Migration Agents
 
-A Claude-Code/Cursor-style web IDE built on LangChain's `deepagents` (JS). Open a local project folder, chat with an agent that can read/search/edit files and run shell commands in that folder, and approve or deny risky actions before they happen. Purpose-built for code migrations (e.g. MERN → FastAPI) via a team of specialized subagents and a live migration ledger, but works as a general-purpose coding agent too.
+A web IDE for AI-assisted code migrations, built on LangChain's [`deepagents`](https://github.com/langchain-ai/deepagentsjs) (JS).
 
-## Stack
+Open a project — a local folder or a GitHub repository — and chat with an agent that reads, searches, edits and tests the code. Every file write and shell command stops for your approval first. A team of specialized subagents and a live migration ledger make it purpose-built for migrations such as **Express → FastAPI** or **Mongoose → Pydantic/Motor**, but it works as a general-purpose coding agent too.
 
-- **Agent core**: `deepagents` (JS) — `LocalShellBackend` (real disk + real shell) locally or an **E2B microVM** on a deployment, `CompositeBackend` mounting Agent Skills and cross-session memories alongside the project, `todoListMiddleware`, `interruptOn` for approval gating (write_file / edit_file / delete / execute), plus a scope guardrail and credential redaction ahead of every model call.
-- **Backend**: Node.js + TypeScript, Express (REST for the file tree/editor/folder browser), `ws` (two WebSocket endpoints on one HTTP server, routed by path: `/ws` for chat streaming/tool events/approve-deny, `/pty` for the terminal), `node-pty` for local shell processes.
-- **Frontend**: React + Vite + TypeScript, Monaco Editor (including a live diff/merge view for pending edits), `@xterm/xterm` for the terminal, react-markdown.
-- **Models**: Anthropic Claude, Google Gemini, OpenAI, and OpenRouter (any model on OpenRouter's catalog), switchable per session.
+---
 
-## Setup
+## Contents
+
+- [Features](#features)
+- [Architecture](#architecture)
+- [Tech stack](#tech-stack)
+- [Project structure](#project-structure)
+- [Getting started](#getting-started)
+- [Configuration](#configuration)
+- [Authentication](#authentication)
+- [How the agent works](#how-the-agent-works)
+- [Where the agent runs (sandbox)](#where-the-agent-runs-sandbox)
+- [Where data is stored](#where-data-is-stored)
+- [Security model](#security-model)
+- [Tests and evaluations](#tests-and-evaluations)
+- [Deployment](#deployment)
+- [Troubleshooting](#troubleshooting)
+- [Known limitations](#known-limitations)
+- [Roadmap](#roadmap)
+
+---
+
+## Features
+
+### Agent
+- **Multi-provider models** — Anthropic Claude, Google Gemini, OpenAI and any model on OpenRouter, switchable per workspace.
+- **Real token streaming** for every provider, with a **Stop** button that aborts generation mid-turn.
+- **11 specialized subagents** — analyzer, dependency mapper, converter, verifier, security reviewer, fixer and more (see [Subagents](#subagents)).
+- **Agent Skills** — migration playbooks loaded on demand by description (see [Skills](#skills)).
+- **Migration ledger** — per-file status (`pending` → `converted` → `verified` / `failed` / `skipped`) that survives across turns and shows as badges in the file tree.
+- **Todo / plan panel** driven by the agent's own task list.
+- **Long-run ready** — automatic conversation summarization near the context limit, model retries with backoff for rate limits, and a tool-call budget that stops a stuck loop.
+- **Memories** — a `/memories/` area the agent can keep notes in across projects, private to each user.
+- **Project instructions** — a repo's own `.deepagents/AGENTS.md` is merged into the system prompt automatically.
+
+### Safety
+- **Human approval** for every `write_file`, `edit_file`, `delete` and `execute` — with an editable Monaco **diff view** for proposed writes.
+- **Path rules** — auto-approve writes into an output folder, and always ask before touching legacy source.
+- **Read provenance** — each approval card lists the files the agent read just before proposing the action, and flags text in those files that addresses an AI agent (a prompt-injection signal).
+- **Credential redaction** — API keys, tokens and connection strings found in project files are masked before anything is sent to a model provider.
+- **Scope guardrail** — clearly off-topic requests are declined before any model call is spent.
+- **Sandboxed execution** — on a deployment, all agent commands run in a disposable **E2B microVM** with an outbound-network allowlist, never on the server.
+
+### Workspaces
+- **Local folders** (development) or **GitHub repositories** (`https://github.com/user/repo`, optionally `#branch`).
+- **Push to GitHub** button that commits and pushes the agent's approved changes.
+- **Interactive terminal** in the same place the agent works (local shell, or inside the sandbox).
+- **Sandbox reconnect** — reloading the page or redeploying the server reconnects you to the same sandbox, edits intact; an abandoned sandbox is shut down after 10 minutes.
+- **Chat history restore** — reopening a project replays its conversation, todos, ledger and any pending approval.
+- **Edit & resend** any earlier message; **New Chat** to start over.
+
+### Accounts (GitHub login)
+- **Sign in with GitHub**, limited to an allowlist of usernames.
+- **My keys** — each user saves their own model API keys and GitHub token, **encrypted** on the server and never shown again.
+- **Private per user** — conversations, migration ledgers, memories, sandboxes, files and terminals are isolated between users.
+- **No PAT needed** for private repos — the GitHub login itself clones and pushes.
+
+### Interface
+- Resizable file tree / editor / chat panels with persisted widths.
+- Filterable file tree with migration-status badges.
+- Markdown chat with code copy buttons, timestamps and expandable error cards.
+- Monaco editor and xterm terminal load only when first opened, keeping the first screen light.
+- Works over plain HTTP (no secure-context-only browser APIs are required).
+
+---
+
+## Architecture
+
+```mermaid
+flowchart LR
+  subgraph Browser
+    UI[React UI<br/>chat · editor · tree · terminal]
+  end
+
+  subgraph Server["Node.js server (one container)"]
+    API[Express REST<br/>/api · /auth]
+    WS[WebSocket /ws<br/>chat · approvals]
+    PTY[WebSocket /pty<br/>terminal]
+    AGENT[deepagents<br/>main agent + subagents]
+    MW[Middleware<br/>guardrail · redaction · ledger<br/>summarization · retries]
+  end
+
+  subgraph External
+    LLM[(Model providers<br/>Anthropic · Gemini · OpenAI · OpenRouter)]
+    E2B[(E2B microVM<br/>cloned repo · shell)]
+    DB[(MongoDB<br/>checkpoints · memories<br/>keys · sandbox records)]
+    GH[(GitHub<br/>OAuth · git)]
+  end
+
+  UI -- HTTP --> API
+  UI -- WS --> WS
+  UI -- WS --> PTY
+  WS --> AGENT --> MW --> LLM
+  AGENT -- files + execute --> E2B
+  PTY --> E2B
+  AGENT --> DB
+  API --> DB
+  API -- sign in --> GH
+  E2B -- clone / push --> GH
+```
+
+**One turn, end to end:**
+
+1. The browser sends `user_message` over `/ws`.
+2. The server runs the deepagents graph with live streaming (`agent.stream`, `updates` + `messages` modes).
+3. Middleware checks scope and redacts credentials before each model call.
+4. Tool calls run against the workspace backend — the E2B sandbox, or the local disk in development.
+5. A write or shell command raises a LangGraph **interrupt**; the browser shows an approval card and resumes the graph with the decision.
+6. State is checkpointed after every step, so the conversation survives reloads and redeploys.
+
+---
+
+## Tech stack
+
+| Layer | Technology |
+| --- | --- |
+| Agent | `deepagents` 1.x, LangGraph, LangChain middleware |
+| Models | `@langchain/anthropic`, `@langchain/google-genai`, `@langchain/openai` (also used for OpenRouter) |
+| Backend | Node.js 20+, TypeScript, Express, `ws`, `node-pty` |
+| Frontend | React, Vite, TypeScript, Tailwind CSS, Monaco Editor, xterm.js, react-markdown |
+| Sandbox | E2B (`e2b` SDK) |
+| Persistence | MongoDB (`@langchain/langgraph-checkpoint-mongodb`) or local SQLite |
+| Tests | Vitest (unit), custom eval runner (real model calls) |
+| Deploy | Docker, GitHub Actions, Amazon ECR + ECS (EC2), SSM Parameter Store |
+
+---
+
+## Project structure
+
+```
+.
+├── apps/
+│   ├── server/                     Node/TypeScript backend
+│   │   ├── src/
+│   │   │   ├── server.ts           HTTP server, routes, WebSocket upgrade, graceful shutdown
+│   │   │   ├── ws.ts               chat protocol: workspaces, streaming, approvals, history replay
+│   │   │   ├── terminal.ts         /pty terminal (local PTY or E2B PTY)
+│   │   │   ├── auth.ts             auth modes, session cookies, allowlist, origin checks
+│   │   │   ├── userSecrets.ts      encrypted per-user key store
+│   │   │   ├── security/crypto.ts  session signing (HMAC) and key encryption (AES-256-GCM)
+│   │   │   ├── workspaceRegistry.ts which workspaces each user may read
+│   │   │   ├── routes/             files, providers, GitHub login, "me"/keys, Gemini proxy
+│   │   │   └── agent/
+│   │   │       ├── index.ts        builds the deep agent (backends, middleware, subagents)
+│   │   │       ├── subagents.ts    subagent definitions
+│   │   │       ├── prompts/        system prompt and one prompt per subagent (.md)
+│   │   │       ├── e2bSandbox.ts   E2B backend adapter (path mapping, reconnect, keep-alive)
+│   │   │       ├── sandboxSession.ts sandbox ownership, grace period, reconnect records
+│   │   │       ├── persistence.ts  MongoDB / SQLite checkpoints and memories
+│   │   │       ├── gitWorkspace.ts clone and push (local or in the sandbox)
+│   │   │       ├── ledger.ts       record_migration tool + ledger state
+│   │   │       ├── guardrails.ts   off-topic request guardrail
+│   │   │       ├── secretRedaction.ts credential redaction middleware
+│   │   │       └── injectionSignals.ts agent-directed text detection
+│   │   ├── skills/                 Agent Skills (migration playbooks)
+│   │   └── evals/                  behavioural evaluations + fixture repository
+│   └── web/                        React + Vite frontend
+│       └── src/
+│           ├── App.tsx             workspace session, socket handling, layout
+│           ├── components/
+│           │   ├── auth/           sign-in gate, My keys panel, user menu
+│           │   ├── chat/           chat, approval cards, diff editor, ledger, todos
+│           │   ├── editor/         file tree, Monaco editor
+│           │   ├── terminal/       xterm terminal
+│           │   ├── workspace/      workspace picker, folder browser
+│           │   └── layout/         header, resizable panels, system info
+│           └── lib/                API/auth client, WebSocket client, browser helpers
+├── packages/shared/                TypeScript types shared by server and web (protocol schema)
+├── deploy/ecs/                     ECS task definition + AWS setup guide
+├── .github/workflows/deploy.yml    CI/CD: test → build → ECR → ECS
+├── Dockerfile                      single image: built frontend served by the backend
+└── docker-compose.yml              single-host alternative to ECS
+```
+
+---
+
+## Getting started
+
+### Prerequisites
+- **Node.js 20+** and npm
+- At least one model API key (Anthropic, Google, OpenAI or OpenRouter)
+- Optional: an **E2B** API key (sandboxed execution), a **MongoDB** URI (e.g. free Atlas M0)
+
+### Install
 
 ```bash
 npm install
 cp .env.example .env
 ```
 
-Fill in `.env` with the key(s) for whichever provider(s) you plan to use — you don't need all of them:
+Put at least one model key in `.env`:
 
-```
+```env
 ANTHROPIC_API_KEY=sk-ant-...
 GOOGLE_API_KEY=...
 OPENAI_API_KEY=sk-...
 OPENROUTER_API_KEY=sk-or-...
 ```
 
-A key can also be entered per-session in the workspace picker instead of `.env` — it's kept in server memory for that session only and is never written to disk.
+A key can also be typed into the workspace picker for one session instead.
 
-## Run
+### Run locally
 
 In two terminals:
 
@@ -39,202 +218,305 @@ npm run dev:server
 npm run dev:web
 ```
 
-Open http://localhost:5173, enter the full path to a local project folder, pick a provider and model, and click "Open Workspace".
+Open **http://localhost:5173**, enter a local folder path (or a GitHub URL), pick a provider and model, and click **Open Workspace**.
+
+Vite proxies `/api`, `/auth`, `/ws` and `/pty` to the backend on port 4000, so the browser only ever talks to one origin. To share a local instance, tunnel port 5173 (for example `ngrok http 5173`).
 
 ### Migration settings (optional)
 
-When opening a workspace you can set two glob lists:
+When opening a workspace:
 
-- **Output folder** — paths writes are auto-approved into (e.g. `/migrated/**, /out/**`), so the agent isn't stopped for every generated file.
-- **Legacy source** — paths that always require approval before writing, even if an auto-approve glob would otherwise cover them (e.g. `/legacy/**, /src/**`), so your original code can't be silently overwritten.
+- **Output folder** — globs where writes are auto-approved (e.g. `/migrated/**, /out/**`).
+- **Legacy source** — globs where writes always need approval, even if an output glob matches (e.g. `/legacy/**, /src/**`).
 
-Shell commands (`execute`) always require approval regardless of these settings. Paste an absolute folder path, type one, or use "Browse…" — all three are normalized into the right glob automatically.
+Shell commands always require approval. Pasted or browsed absolute paths are converted to globs automatically.
 
-## Tests and evaluations
+### Build for production
 
 ```bash
-npm test  --workspace=apps/server   # unit tests — no model calls, no network
-npm run eval --workspace=apps/server # behavioural evals — real model calls
+npm run build          # shared → server → web
+npm run start:server   # serves the API and the built frontend on PORT
 ```
 
-The unit tests cover the pieces where a silent break is expensive: workspace path
-containment, the scope guardrail's false-positive cases, credential redaction, agent-directed
-text detection, and skill frontmatter (a `name` that does not match its directory makes a
-skill invisible with no error).
+---
 
-The evals are different in kind: they drive the real agent against a fixture repository in
-`apps/server/evals/fixtures/` and assert on behaviour — that an instruction embedded in a
-source comment is reported rather than obeyed, that an off-topic request is declined, that a
-file is read before being described, that credentials are not echoed back. **Nothing is ever
-executed**: the runner rejects every interrupt, so a case checking the agent does not run
-`curl | bash` verifies it never even proposed it.
+## Configuration
 
-Run one case with `npm run eval --workspace=apps/server -- injection`.
+All settings are environment variables (`.env` locally; SSM Parameter Store and the task definition on AWS). See [`.env.example`](.env.example) and [`.env.production.example`](.env.production.example).
 
-Prompts are the behaviour of this product and nothing else tests them, so a prompt change
-should be accompanied by an eval run.
+### Models
 
-## How approval works
+| Variable | Purpose |
+| --- | --- |
+| `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY` | Server model keys. Used in local and shared-token modes only — **never** for GitHub-login users. |
+| `ANTHROPIC_MODEL`, `GOOGLE_MODEL`, `OPENAI_MODEL`, `OPENROUTER_MODEL` | Default model shown in the picker for each provider. |
 
-Any `write_file`, `edit_file`, `delete`, or `execute` (shell) tool call pauses the agent and shows an Approve/Deny card in the chat before it touches your disk or runs anything — this is `deepagents`' `interruptOn` + LangGraph's interrupt/resume mechanism, not custom code. The main agent is shell-capable, so its approval gate is enforced at the tool-call level; subagents that have no shell access get real, framework-enforced filesystem permissions instead.
+### Server and access
 
-## Migration subagents
+| Variable | Purpose |
+| --- | --- |
+| `PORT` | HTTP port (default `4000`). |
+| `CLOUD_MODE` | `1` on any public deployment: refuses to start without authentication and disables the local folder browser. |
+| `ALLOWED_ORIGINS` | Comma-separated origins allowed for CORS and cookie-authenticated requests. |
+| `AUTH_TOKEN` | Shared access token (shared-token mode). |
+| `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET` | Enable GitHub login. |
+| `APP_SECRET` | ≥ 32 characters. Signs session cookies and encrypts saved keys. |
+| `PUBLIC_URL` | Where the app is reached, e.g. `http://13.202.56.144`; the OAuth callback is built from it. |
+| `ALLOWED_GITHUB_USERS` | Comma-separated GitHub usernames allowed to sign in (`*` = anyone). |
 
-The main agent can delegate to specialized subagents, each scoped to its own task and tools:
+### Sandbox and storage
+
+| Variable | Purpose |
+| --- | --- |
+| `SANDBOX_PROVIDER` | `e2b` to run agent work in E2B microVMs; unset for the local disk. |
+| `E2B_API_KEY` | E2B API key. |
+| `MONGODB_URI` | MongoDB connection string; unset uses local SQLite and files. |
+| `MONGODB_DB` | Database name (default `deepagents`); use a different one per environment. |
+
+---
+
+## Authentication
+
+The mode is chosen from configuration:
+
+| Mode | Enabled when | Who is a "user" | Model keys used |
+| --- | --- | --- | --- |
+| **GitHub login** | `GITHUB_OAUTH_CLIENT_ID` is set | each GitHub account on the allowlist | only the user's own (saved in **My keys** or typed per session) |
+| **Shared token** | `AUTH_TOKEN` is set | everyone with the token is one user | the server's keys, or one typed per session |
+| **None** | neither is set | local development only | the server's keys |
+
+The server refuses to start if GitHub login is half-configured, or if `CLOUD_MODE=1` has no authentication at all.
+
+### Setting up GitHub login
+
+1. Create an OAuth App at **GitHub → Settings → Developer settings → OAuth Apps**:
+   - Homepage URL: your `PUBLIC_URL`
+   - Authorization callback URL: `<PUBLIC_URL>/auth/github/callback`
+2. Generate a client secret.
+3. Set `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, `APP_SECRET`, `PUBLIC_URL` and `ALLOWED_GITHUB_USERS`.
+
+Generate `APP_SECRET` with:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+The login requests the `repo` and `read:user` scopes, so the agent can clone private repositories and push without a personal access token. A PAT saved in **My keys** is only needed for the agent's GitHub tools (issues, PRs, search via GitHub's MCP server) or different permissions.
+
+Users are identified by GitHub's numeric id, not their username, so a renamed or re-registered username can never inherit someone else's data. Removing a username from `ALLOWED_GITHUB_USERS` locks that user out on their next request. Rotating `APP_SECRET` signs everyone out and makes saved keys unreadable (users save them again).
+
+---
+
+## How the agent works
+
+### Approvals
+
+`write_file`, `edit_file`, `delete` and `execute` pause the agent through deepagents' `interruptOn` and LangGraph's interrupt/resume. The card offers **Approve**, **Deny** and **Edit** — for writes, a Monaco diff editor where **Save & Approve** writes your edited version. **Always Approve** skips the prompt for that tool for the rest of the session.
+
+Subagents without shell access get framework-enforced filesystem permissions instead of prompts.
+
+### Subagents
 
 | Subagent | Role |
 | --- | --- |
 | `analyzer` | Surveys the legacy codebase's structure and stack |
-| `dependency-mapper` | Traces module/package dependencies |
+| `dependency-mapper` | Traces module and package dependencies to decide migration order |
 | `pattern-cataloguer` | Catalogues recurring code patterns to migrate |
-| `converter` | Performs the actual code conversion |
-| `config-migrator` | Migrates config/build/env files |
+| `converter` | Performs the code conversion |
+| `config-migrator` | Migrates configuration, build and environment files |
 | `test-migrator` | Migrates the test suite |
-| `verifier` | Checks converted output for parity, returns a structured pass/fail/partial verdict |
-| `security-reviewer` | Compares migrated code against its source for protections lost in translation — read-only |
-| `fixer` | Repairs issues the verifier flags |
-| `skill-author` | Harvests a reusable playbook from a finished migration; may only write under `/skills/` |
+| `verifier` | Checks converted output for parity and returns a pass / fail / partial verdict |
+| `security-reviewer` | Compares migrated code with its source for protections lost in translation (read-only) |
+| `fixer` | Repairs issues the verifier reports |
+| `skill-author` | Turns a finished migration into a reusable playbook; may only write under `/skills/` |
+| `general-purpose` | Replaces the framework's built-in general subagent with one that follows this app's rules |
 
-Subagents that write code declare access to the bundled Agent Skills
-(`apps/server/skills/*/SKILL.md`) and load them on demand — nothing names a skill by path, so
-adding a directory is all it takes for the agent to start using it.
+Prompts live in [`apps/server/src/agent/prompts/`](apps/server/src/agent/prompts/) as Markdown.
 
-Two kinds ship: **path skills** for one translation (`express-to-fastapi`,
-`mongoose-to-pydantic-motor`, `jest-to-pytest`) and **cross-cutting skills** that apply to any
-migration regardless of stack (`migration-safety`, `http-api-parity`, `test-parity`). Prefer
-the second when adding your own — three of them cover every stack, where per-path skills only
-cover the ones you wrote. The format is documented in
-[`apps/server/skills/README.md`](apps/server/skills/README.md).
+### Skills
 
-## UI
+Skills in [`apps/server/skills/`](apps/server/skills/) are mounted at `/skills/`. Only each skill's `name` and `description` sit in context; the agent reads the body when a description matches the work. Nothing names a skill by path, so adding a directory is all it takes.
 
-- **File explorer** — filterable/searchable tree with expand/collapse, per-file migration-status badges driven by the live ledger, refresh.
-- **Chat** — real token-by-token streaming for every provider, a Stop button while streaming, tool-call/result cards with diffs, a todo/plan panel, a migration ledger panel, distinct error cards, timestamps, and copy buttons on messages and code blocks. Approving a pending `write_file`/`edit_file` opens a real Monaco diff editor (not just colored text) that you can edit directly before approving — the edited content is what actually gets written.
-- **Layout** — resizable file tree / chat / editor panels with persisted widths and collapsible side panels; a real interactive terminal (toggle in the header) docks under the editor, resizable by dragging its bottom edge.
-- **Editor** — Monaco, opens any file from the tree.
+| Kind | Skills |
+| --- | --- |
+| Cross-cutting (any stack) | `migration-safety`, `http-api-parity`, `test-parity` |
+| Path-specific | `express-to-fastapi`, `mongoose-to-pydantic-motor`, `jest-to-pytest` |
 
-## Project layout
+Prefer cross-cutting skills when adding your own. The format is documented in [`apps/server/skills/README.md`](apps/server/skills/README.md).
 
-```
-apps/server   Node/TS backend: agent setup, subagents, skills, REST file API, WebSocket streaming/approval protocol
-apps/web      React + Vite frontend: file tree, Monaco editor, chat/tool/ledger UI, workspace picker
-packages/shared  TypeScript types shared by server and web (WebSocket event schema)
-```
+### Middleware
 
-## Cloud deployment (backend on AWS EC2, frontend on Vercel)
+| Middleware | What it does |
+| --- | --- |
+| Scope guardrail | Declines clearly off-topic requests before any model call |
+| Todo list | Maintains the plan shown in the todo panel |
+| Migration ledger | Adds the `record_migration` tool and per-file status |
+| Secret redaction | Masks credentials in tool results and messages before they reach the provider |
+| Summarization | Summarizes older turns at 70% of the model's context window |
+| Model retry | 3 retries with 5–40 s backoff, sized for free-tier rate-limit windows |
+| Tool retry | Retries transient tool failures |
+| Tool-call limit | Ends a run after 150 tool calls |
+| Model fallback | Tries fallback models when the primary fails, if a workspace sets `fallbackModels` (protocol option; not in the picker yet) |
 
-A cloud-hosted backend can't see your local disk, so it works on a GitHub repo instead.
-Enter a URL rather than a path in the workspace picker (`https://github.com/user/repo`,
-optionally `#branch-name`) and the backend clones it and operates on the clone. A
-**"Push to GitHub"** button appears in the header for any workspace opened this way.
+### Backends
 
-### Where the agent's commands run
+The agent's filesystem is a `CompositeBackend`:
 
-Two modes, chosen by `SANDBOX_PROVIDER`:
+| Path | Backed by |
+| --- | --- |
+| `/` (default) | The project — the E2B sandbox, or the local folder in development |
+| `/skills/` | Bundled skills (read from the server) |
+| `/memories/` | MongoDB store namespaced per user, or local files |
+| `/large_tool_results/`, `/conversation_history/` | Thread state, so internal bookkeeping never lands in your repository |
+
+---
+
+## Where the agent runs (sandbox)
 
 | | `SANDBOX_PROVIDER` unset | `SANDBOX_PROVIDER=e2b` |
 | --- | --- | --- |
-| Agent files + shell | this machine, scoped to the workspace | an E2B microVM |
+| Agent files and shell | this machine, inside the workspace | an E2B microVM |
 | Terminal | a PTY on this machine | a PTY in the microVM |
-| Repo clone | `apps/server/.data/repos/` | `/home/user/project` in the microVM |
-| Workspace input | local folder **or** GitHub URL | GitHub URL only |
+| Repository clone | `apps/server/.data/repos/` (per user under GitHub login) | `/home/user/project` in the microVM |
+| Workspace input | local folder or GitHub URL | GitHub URL |
 
-Leave it unset for local development — the point there is to work on folders you can see.
-Set it to `e2b` on any deployment: deepagents' own docs say `LocalShellBackend` (the
-alternative) is for "dedicated development environments" and never production systems,
-because `execute` runs with the server process's privileges.
+Leave it unset for local development. Use `e2b` on every deployment: deepagents documents `LocalShellBackend` as for dedicated development environments only, because `execute` runs with the server's own privileges.
 
-E2B needs `E2B_API_KEY`. Outbound network from the sandbox is restricted to an allowlist
-(GitHub, npm, PyPI, Debian) — see `EGRESS_ALLOWLIST` in `apps/server/src/agent/e2bSandbox.ts`.
+**Network:** outbound traffic from the sandbox is denied by default and allowed only to GitHub, npm, PyPI and Debian package hosts (`EGRESS_ALLOWLIST` in [`e2bSandbox.ts`](apps/server/src/agent/e2bSandbox.ts)).
 
-### Where conversations are stored
+**Lifecycle:**
 
-Chosen by `MONGODB_URI`:
+| Event | What happens |
+| --- | --- |
+| Open a GitHub workspace | Reuses your running sandbox for that project, reconnects to one a previous server process left, or creates and clones a new one |
+| Workspace open | Lifetime refreshed every 5 minutes |
+| Tab closed or project switched | Kept for a **10-minute grace period**, then killed |
+| Two tabs on one project | Shared; the grace period starts only when both are closed |
+| Server redeploy | Sandboxes are detached, not killed; users reconnect after the restart |
+| Nobody returns | E2B reclaims it when the grace period runs out |
 
-| | `MONGODB_URI` unset | `MONGODB_URI` set |
+Sandboxes are owned by a user. Another user's `e2b://<id>` resolves to nothing in the file routes and the terminal.
+
+---
+
+## Where data is stored
+
+| Data | `MONGODB_URI` unset | `MONGODB_URI` set |
 | --- | --- | --- |
-| Chat history, todos, migration ledger | `apps/server/.data/sessions.sqlite` | MongoDB (`MONGODB_DB`, default `deepagents`) |
-| Agent `/memories/` | `apps/server/.data/memories/` | MongoDB, namespaced per user |
-| Survives container replacement (e.g. an ECS redeploy) | No | Yes |
-| Old data cleanup | Never | Checkpoints untouched for 30 days are deleted |
+| Conversations, todos, migration ledger | `apps/server/.data/sessions.sqlite` | MongoDB checkpoints (deleted after 30 days untouched) |
+| `/memories/` | `apps/server/.data/memories/` (shared) | MongoDB store, namespaced per user |
+| Saved user keys (encrypted) | `apps/server/.data/user-secrets.json` | `user_secrets` collection |
+| Sandbox reconnect records | in memory | `sandboxes` collection (expire after 1 day) |
+| Survives container replacement | No | Yes |
 
-Local SQLite is fine on a machine whose disk persists (your PC, an EC2 instance). Set
-`MONGODB_URI` for anything that replaces containers, such as ECS — otherwise every redeploy
-wipes the history. A free MongoDB Atlas M0 cluster (512 MB) is enough for testing; use a
-different `MONGODB_DB` per environment.
+Under GitHub login, conversation threads are keyed by user **and** project, so two people opening the same repository each get their own history.
 
-### Deploy the backend to EC2
+---
 
-1. Launch an instance (`t3.micro` is free-tier eligible), attach an **Elastic IP** so the
-   address survives a reboot.
-2. **Disable IMDS** (`HttpEndpoint=disabled`, or enforce IMDSv2 with hop limit 1). This is
-   the most important AWS-specific step: it's what stops a shell on the box from reading the
-   instance role's credentials.
-3. Run the server as a **non-root user** with a restricted home — never as `root` or `ubuntu`.
-4. Put Caddy in front for automatic TLS and keep the app's port closed to the world.
-5. Build and start:
-   ```bash
-   npm install && npm run build:server
-   npm run start:server
-   ```
-6. Set the environment variables below, then keep the security group scoped to your own IP
-   until you have confirmed authentication works.
+## Security model
 
-Unlike a free-tier PaaS disk, EBS persists — `sessions.sqlite` and any cloned repos survive
-restarts. See the note on database growth under **Known limitations**.
+| Threat | Mitigation |
+| --- | --- |
+| Open URL gives strangers a shell | GitHub login with allowlist, or a shared token; the server refuses to start public without auth |
+| Session theft by page scripts | Session cookie is `HttpOnly`, `SameSite=Lax`, `Secure` over HTTPS, HMAC-signed, 7-day expiry |
+| Other sites acting as the user (CSRF, cross-site WebSocket) | Trusted `Origin` required on state-changing requests and WebSocket handshakes under GitHub login |
+| Login CSRF | OAuth `state` value bound to a short-lived cookie |
+| Database leak exposes API keys | AES-256-GCM with a key derived from `APP_SECRET`; each ciphertext bound to its user and key name |
+| One user reading another's work | Threads, memories, workspace registry, sandboxes and clone directories are all per user |
+| Users spending the operator's model credits | Under GitHub login, server model keys are never used — not even as a fallback |
+| Agent runs something destructive | Approval on every write and command; E2B isolation on deployments |
+| Prompt injection in repository files | Read provenance on approval cards, agent-directed text flagged, sandbox egress allowlist |
+| Secrets in code sent to providers | Credential redaction before every model call |
+| Terminal leaks server secrets | PTY runs with an allowlisted environment only |
+| Path traversal in file routes | Roots must be registered by the server for that user; paths resolved and contained |
+| Token in a repo URL | Refused; clone/push tokens passed through a credential helper, never in `.git/config` or command lines |
 
-### Deploy the frontend to Vercel
+---
 
-1. Import the repo and set the project root to `apps/web`.
-2. Set `VITE_SERVER_URL` to your backend's origin (e.g. `https://api.example.com`) — this is
-   what makes the frontend call your backend instead of assuming same-origin.
-3. Deploy — Vercel auto-detects the Vite build.
-4. Add that Vercel URL to the backend's `ALLOWED_ORIGINS`.
+## Tests and evaluations
 
-### Securing a public deployment
-
-Set these on any backend reachable from outside localhost:
-
-```
-CLOUD_MODE=1
-AUTH_TOKEN=<random string>
-ALLOWED_ORIGINS=https://your-frontend.vercel.app
+```bash
+npm test --workspace=apps/server       # unit tests — no model calls, no network
+npm run eval --workspace=apps/server   # behavioural evals — real model calls
+npm run eval --workspace=apps/server -- injection   # one group of cases
 ```
 
-Generate the token with
-`node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
+**Unit tests** cover the pieces where a silent break is expensive: session signing and key encryption, authentication modes, the allowlist, origin checks, the OAuth state check, per-user workspace and sandbox isolation, the sandbox grace period and reconnect, refusing server keys under GitHub login, path containment, E2B path mapping, the scope guardrail, credential redaction, agent-directed text detection and skill frontmatter.
 
-- `CLOUD_MODE=1` makes `AUTH_TOKEN` mandatory — the server **refuses to start** without it,
-  rather than coming up wide open — and disables `/api/browse`, which exists to pick a
-  folder on your own machine and is just a directory listing of someone else's host once
-  the backend is remote.
-- `AUTH_TOKEN` gates every REST route and both WebSocket endpoints. It is **not** compiled
-  into the web bundle (that would publish it to everyone who loads the page); the browser
-  asks for it once and keeps it in `localStorage`. Since browsers can't set headers on a
-  WebSocket handshake and query strings end up in proxy logs, the socket sends it as a
-  subprotocol and the server selects the literal `bearer` back, never the token.
-- `ALLOWED_ORIGINS` replaces the default "reflect any origin" CORS behaviour, so only your
-  own frontend can call the API from a browser.
-- `SANDBOX_PROVIDER=e2b` plus `E2B_API_KEY` moves the agent's shell and file operations off
-  the host entirely. Strongly recommended on any public deployment.
+**Evals** run the real agent against a fixture repository in `apps/server/evals/fixtures/` and assert behaviour: an instruction embedded in a source comment is reported rather than obeyed, off-topic requests are declined, files are read before being described, the right skill is found by description, and credentials are not echoed. Nothing is executed — the runner rejects every interrupt.
 
-`/api/health` stays unauthenticated so a load balancer can reach it, and reports whether a
-token is required. Leaving `AUTH_TOKEN` unset is supported for local development only and
-logs a warning at boot.
+Prompts are this product's behaviour, so a prompt change should come with an eval run.
 
-**Just want a public URL to your local instance, no cloud hosting?** Keep running `npm
-run dev:server`/`dev:web` locally and tunnel port 5173 (e.g. `ngrok http 5173`) — the
-Vite proxy already forwards everything through that one port, so no other setup is
-needed, and you keep direct access to your real local folder (no git clone/push cycle).
+---
 
-## Known limitations (v1)
+## Deployment
 
-- The Stop button genuinely aborts model generation and stops the graph from taking further steps (verified against LangGraph's own signal propagation), but it cannot kill a shell command that's already running — `execute` spawns without a cancellable signal, so an in-flight command keeps running in the background even after Stop.
-- The terminal is a real, independent shell (not tied to the agent's own `execute` calls) — it does not participate in the approval system, so anything typed there runs immediately with no review step, same as opening a terminal yourself. It can only be opened at a directory the server has itself opened as a workspace, and it runs with an allowlisted environment rather than the server's own, so provider API keys are not visible to it.
-- The access token is shared, not per-user: anyone holding it sees the same workspaces and the same conversation history. Cloned repos are keyed by repo URL and threads by path, so two people opening the same repo share one working directory and one conversation. Fine for a single operator; not yet a multi-user system.
-- The diff/merge editor for `write_file` treats the file's current on-disk content as "original"; if the agent's proposed write conflicts with edits you made in the Monaco editor tab that haven't round-tripped to disk, those in-editor changes won't be reflected in the diff.
-- `node-pty` is only used when `SANDBOX_PROVIDER` is unset; in sandbox mode the terminal is an E2B PTY and node-pty is not involved. Its prebuilt binary was verified on Windows (this project's dev environment) but not on a Linux host.
-- An E2B sandbox is kept alive while its workspace is open, but E2B caps a sandbox's total lifetime by plan (1 hour on the free Hobby plan, 24 hours on Pro). A migration running longer than that loses its sandbox. Closing the browser tab also closes the sandbox immediately; reattaching after a refresh is not supported yet, because without per-user login there is no safe way to know the reconnecting person owns it.
-- The SQLite checkpointer (used when `MONGODB_URI` is unset) stores a full state snapshot per graph step, including file contents carried in the message history, and never prunes. A single long migration can grow `sessions.sqlite` into the hundreds of megabytes. Nothing breaks, but on a small disk it is worth watching — clearing a project's chat removes its checkpoints, and `VACUUM` (followed by `PRAGMA wal_checkpoint(TRUNCATE)`, or the reclaimed space just moves into the WAL) compacts the file.
+### AWS: GitHub Actions → ECR → ECS (current setup)
 
-Chat history, todos, and the migration ledger persist (to SQLite or MongoDB — see **Where conversations are stored**) and are restored automatically when you reopen a project.
+```
+git push (aws branch)
+  → GitHub Actions: install → build (type-checks both apps) → unit tests
+  → build Docker image → push to Amazon ECR
+  → register task definition → update ECS service → wait until healthy
+```
+
+| Piece | Detail |
+| --- | --- |
+| Compute | One EC2 instance (`t3.small`) registered in an ECS cluster; no load balancer |
+| Address | Elastic IP `13.202.56.144` |
+| Image | Amazon ECR, last 5 images kept |
+| Secrets | SSM Parameter Store (`/deep-agents/*`, SecureString), read by ECS at container start |
+| CI → AWS | GitHub OIDC role — no AWS keys stored in GitHub |
+| Health | Container health check on `/api/health`; deployment circuit breaker rolls back failed releases |
+| Logs | CloudWatch `/ecs/deep-agents-app`, 7-day retention |
+
+Every push to `aws` deploys automatically, with about a minute of downtime while the container is replaced. Step-by-step setup, required secrets and everyday operations are in **[`deploy/ecs/README.md`](deploy/ecs/README.md)**.
+
+### Single host with Docker Compose
+
+```bash
+cp .env.production.example .env.production   # fill in values
+docker compose up -d --build
+```
+
+Maps host port 80 to the container and keeps SQLite data in a volume. Do not run it on a host that is also an ECS container instance — both need port 80.
+
+### Frontend on a separate host
+
+Set `VITE_SERVER_URL` to the backend origin and add the frontend origin to `ALLOWED_ORIGINS`. This works with shared-token mode; GitHub login expects the frontend and API on one origin, because its session cookie is `SameSite=Lax`.
+
+---
+
+## Troubleshooting
+
+| Symptom | Cause and fix |
+| --- | --- |
+| Blank page over HTTP with `crypto.randomUUID is not a function` | An old build; current builds avoid secure-context-only APIs. Redeploy. |
+| GitHub Actions: `Not authorized to perform sts:AssumeRoleWithWebIdentity` | The deploy role's trust policy `sub` must use GitHub's ID format: `repo:<owner>@<ownerId>/<repo>@<repoId>:ref:refs/heads/aws`. See `deploy/ecs/README.md`. |
+| Deploy waits forever at "Run one task and wait until healthy" | Port 80 on the host is taken (e.g. an old Docker Compose container). Stop it and re-run the deploy job. |
+| New task fails to start, deploy rolls back | A parameter in the task definition's `secrets` is missing from SSM, or GitHub login is half-configured. Check the CloudWatch log. |
+| Sign-in returns "not allowed" | Add the GitHub username to `ALLOWED_GITHUB_USERS` and redeploy. |
+| "No … API key saved" when opening a workspace | Under GitHub login each user needs their own key: **My keys** → save it. |
+| Saved keys show as not saved after a change | `APP_SECRET` was rotated; save the keys again. |
+| `git clone failed in sandbox` for a private repo | Sign out and in again to refresh GitHub access, or save a PAT in **My keys**. |
+
+---
+
+## Known limitations
+
+- **No HTTPS yet** on the current AWS address — cookies and tokens travel unencrypted until CloudFront (or another TLS terminator) is in front.
+- **Stop** aborts generation and prevents further steps, but a shell command already running finishes in the background.
+- The **terminal** is not approval-gated — what you type runs immediately, like any terminal. It opens only in your own workspace, with an allowlisted environment.
+- **E2B lifetime caps** — a sandbox lives at most 1 hour on E2B's free Hobby plan (24 hours on Pro), so very long migrations can lose it.
+- The **diff editor** compares against the file on disk, not unsaved edits in an editor tab.
+- **Conversations from before GitHub login** were not tied to a user and don't appear once it is enabled; they expire after 30 days.
+- **SQLite growth** (local mode) — checkpoints store full state per step and are never pruned; clear a project's chat or `VACUUM` to reclaim space.
+- `node-pty`'s prebuilt binary is verified on Windows; in sandbox mode the terminal uses E2B's PTY instead.
+
+---
+
+## Roadmap
+
+- HTTPS via CloudFront, then restrict the instance's port 80 to CloudFront only
+- Terminal sessions that survive a page reload
+- Per-user usage visibility (tokens and sandbox time)

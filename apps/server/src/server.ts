@@ -16,10 +16,13 @@ import { geminiProxyRouter } from "./routes/geminiProxy.js";
 import { agentInfoRouter } from "./routes/agentInfo.js";
 import { createChatWebSocketServer } from "./ws.js";
 import { createTerminalWebSocketServer } from "./terminal.js";
-import { assertAuthConfig, authorizeUpgrade, isAuthEnabled, localhostOnly, requireAuth } from "./auth.js";
+import { assertAuthConfig, authMode, authorizeUpgrade, isAuthEnabled, localhostOnly, requireAuth } from "./auth.js";
+import { githubAuthRouter } from "./routes/githubAuth.js";
+import { meRouter } from "./routes/me.js";
 import { SYSTEM_PROMPT, SUBAGENT_INFO } from "./agent/index.js";
-import { closeAllSandboxSessions } from "./agent/sandboxSession.js";
+import { detachAllSandboxSessions } from "./agent/sandboxSession.js";
 import { closePersistence } from "./agent/persistence.js";
+import type { HealthInfo } from "@deepagents-ide/shared";
 
 // Aborting a turn (the Stop button) races the Gemini SDK's own stream reader: when the
 // underlying fetch is cut off mid-read, @google/generative-ai throws from a tick that isn't
@@ -53,14 +56,19 @@ app.use(express.json({ limit: "25mb" }));
 // cannot be baked into the web bundle (it would be readable by anyone who loads the page),
 // so the browser has to ask the user for it, and only asks when there is something to ask for.
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, authRequired: isAuthEnabled() });
+  const body: HealthInfo = { ok: true, authRequired: isAuthEnabled(), authMode: authMode() };
+  res.json(body);
 });
+
+// Unauthenticated by design: signing in is how a session is obtained.
+app.use("/auth", githubAuthRouter());
 
 app.use("/gemini-proxy", localhostOnly, geminiProxyRouter());
 app.use("/api", requireAuth, filesRouter());
 app.use("/api", requireAuth, browseRouter());
 app.use("/api", requireAuth, providersRouter());
 app.use("/api", requireAuth, agentInfoRouter(SYSTEM_PROMPT, SUBAGENT_INFO));
+app.use("/api", requireAuth, meRouter());
 
 // Serves the built frontend from the same origin and port as the API, so the browser's
 // same-origin assumption (see apps/web/src/lib/serverUrl.ts: SERVER_URL defaults to
@@ -74,7 +82,7 @@ if (fs.existsSync(webDist)) {
   // Only for GET requests that reached here unmatched by any API/proxy route above and
   // don't look like a static asset request (no file extension) — otherwise a missing JS/CSS
   // chunk would silently 200 with index.html's HTML instead of a real 404.
-  app.get(/^(?!\/api|\/gemini-proxy).*/, (req, res, next) => {
+  app.get(/^(?!\/api|\/gemini-proxy|\/auth).*/, (req, res, next) => {
     if (path.extname(req.path)) return next();
     res.sendFile(path.join(webDist, "index.html"));
   });
@@ -115,8 +123,7 @@ server.listen(PORT, () => {
 
 // ECS sends SIGTERM on every redeploy, then SIGKILL after its stop timeout (30s by default).
 // Node running as the container's PID 1 ignores SIGTERM unless a handler exists, so without
-// this every deploy waited the full 30s and was then killed — leaving E2B sandboxes billing
-// until their own idle timeout.
+// this every deploy waited the full 30s and was then killed.
 const SHUTDOWN_DEADLINE_MS = 20_000;
 let shuttingDown = false;
 
@@ -127,9 +134,11 @@ async function shutdown(signal: string) {
 
   server.close();
   const deadline = new Promise<void>((resolve) => setTimeout(resolve, SHUTDOWN_DEADLINE_MS).unref());
-  // Sandboxes first and awaited: the sockets' own close handlers release them without waiting,
-  // which would lose the race against process.exit below.
-  await Promise.race([closeAllSandboxSessions(), deadline]);
+  // Sandboxes are detached, not killed, so users reconnect to them on the next process — a
+  // deploy doesn't throw away work in progress. Each is left the grace period to live, so one
+  // nobody comes back to still stops billing. Awaited first: the sockets' close handlers below
+  // would otherwise start release timers on sandboxes this process is about to abandon.
+  await Promise.race([detachAllSandboxSessions(), deadline]);
 
   for (const wss of [chatWss, terminalWss]) {
     for (const ws of wss.clients) ws.close(1001, "Server shutting down");

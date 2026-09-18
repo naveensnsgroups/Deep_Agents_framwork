@@ -72,10 +72,13 @@ function withToken(url: string, token?: string): string {
  * The token (if given) is only ever used as a one-off argument to clone/fetch, never
  * persisted into the repo's stored remote — see withToken.
  */
-export async function resolveGitWorkspace(input: string, githubToken?: string): Promise<string> {
+export async function resolveGitWorkspace(input: string, githubToken?: string, owner?: string): Promise<string> {
   const { url, branch } = parseGitTarget(input);
-  const dir = path.join(REPOS_DIR, slugFor(url, branch));
-  await fs.mkdir(REPOS_DIR, { recursive: true });
+  // Per owner under GitHub login: two users opening the same repository must not share one
+  // working copy, or each would see — and push — the other's uncommitted edits.
+  const parent = owner ? path.join(REPOS_DIR, owner.replace(/[^a-zA-Z0-9]+/g, "-")) : REPOS_DIR;
+  const dir = path.join(parent, slugFor(url, branch));
+  await fs.mkdir(parent, { recursive: true });
 
   const alreadyCloned = await fs
     .stat(path.join(dir, ".git"))
@@ -107,8 +110,8 @@ export async function resolveGitWorkspace(input: string, githubToken?: string): 
  * repository only ever exists on the disposable machine that runs the agent's commands and
  * never touches this server.
  *
- * Unlike the local path there is no reopen case to handle — a sandbox is created fresh for
- * each workspace, so the clone is always the first thing in it.
+ * Only ever called on a brand-new sandbox — a reconnected one already has the project (see
+ * acquireSandbox) — so the clone is always the first thing in it.
  */
 export async function cloneIntoSandbox(sandbox: E2BSandbox, input: string, githubToken?: string): Promise<void> {
   const { url, branch } = parseGitTarget(input);

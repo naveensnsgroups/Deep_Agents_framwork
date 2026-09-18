@@ -5,6 +5,7 @@ import type { FileNode } from "@deepagents-ide/shared";
 import { isWorkspaceRoot, resolveInWorkspace } from "../workspaceRegistry.js";
 import { sandboxForRoot } from "../agent/sandboxSession.js";
 import { sandboxReadFile, sandboxTree } from "./sandboxFiles.js";
+import { currentUser } from "../auth.js";
 
 const IGNORED = new Set(["node_modules", ".git", "dist", "build", ".next"]);
 
@@ -33,13 +34,14 @@ export function filesRouter() {
   // `e2b://<id>` handle instead of a path, and the files live in the microVM.
   router.get("/files", async (req, res) => {
     const root = String(req.query.root ?? "");
-    const sandbox = sandboxForRoot(root);
+    const owner = currentUser(res).id;
+    const sandbox = sandboxForRoot(root, owner);
 
     try {
       if (sandbox) {
         return res.json({ tree: await sandboxTree(sandbox) });
       }
-      if (!isWorkspaceRoot(root) || !fs.existsSync(root)) {
+      if (!isWorkspaceRoot(root, owner) || !fs.existsSync(root)) {
         return res.status(400).json({ error: "Invalid or missing root directory" });
       }
       res.json({ tree: buildTree(root, root, 0) });
@@ -51,12 +53,13 @@ export function filesRouter() {
   router.get("/file", async (req, res) => {
     const root = String(req.query.root ?? "");
     const filePath = String(req.query.path ?? "");
-    const sandbox = sandboxForRoot(root);
+    const owner = currentUser(res).id;
+    const sandbox = sandboxForRoot(root, owner);
 
     try {
       const content = sandbox
         ? await sandboxReadFile(sandbox, filePath)
-        : fs.readFileSync(resolveInWorkspace(root, filePath), "utf-8");
+        : fs.readFileSync(resolveInWorkspace(root, filePath, owner), "utf-8");
       res.json({ content });
     } catch (err) {
       res.status(400).json({ error: (err as Error).message });

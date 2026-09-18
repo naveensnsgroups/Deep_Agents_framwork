@@ -31,28 +31,39 @@ describe("workspace containment", () => {
 describe("workspace registry", () => {
   it("only trusts roots the server itself opened", () => {
     const unknown = path.resolve("/tmp/not-opened-by-us");
-    expect(isWorkspaceRoot(unknown)).toBe(false);
-    expect(() => resolveInWorkspace(unknown, "anything.txt")).toThrow(/Unknown workspace root/);
+    expect(isWorkspaceRoot(unknown, "alice")).toBe(false);
+    expect(() => resolveInWorkspace(unknown, "anything.txt", "alice")).toThrow(/Unknown workspace root/);
   });
 
   it("accepts a registered root regardless of how it is spelled back", () => {
-    const opened = allowWorkspaceRoot(path.join(path.resolve("/srv/opened"), "sub", ".."));
-    expect(isWorkspaceRoot(opened)).toBe(true);
+    const opened = allowWorkspaceRoot(path.join(path.resolve("/srv/opened"), "sub", ".."), "alice");
+    expect(isWorkspaceRoot(opened, "alice")).toBe(true);
     // Trailing separators and redundant segments must still resolve to the same workspace,
     // because the client echoes this string back over HTTP.
-    expect(isWorkspaceRoot(path.resolve("/srv/opened/"))).toBe(true);
-    expect(isWorkspaceRoot(path.resolve("/srv/opened/./"))).toBe(true);
+    expect(isWorkspaceRoot(path.resolve("/srv/opened/"), "alice")).toBe(true);
+    expect(isWorkspaceRoot(path.resolve("/srv/opened/./"), "alice")).toBe(true);
   });
 
   it("blocks traversal even from a registered root", () => {
-    allowWorkspaceRoot(path.resolve("/srv/opened2"));
-    expect(() => resolveInWorkspace(path.resolve("/srv/opened2"), "../../etc/passwd")).toThrow(
+    allowWorkspaceRoot(path.resolve("/srv/opened2"), "alice");
+    expect(() => resolveInWorkspace(path.resolve("/srv/opened2"), "../../etc/passwd", "alice")).toThrow(
       /escapes workspace root/
     );
   });
 
   it("resolves a legitimate file inside a registered root", () => {
-    const opened = allowWorkspaceRoot(path.resolve("/srv/opened3"));
-    expect(resolveInWorkspace(opened, "src/main.ts")).toBe(path.resolve("/srv/opened3/src/main.ts"));
+    const opened = allowWorkspaceRoot(path.resolve("/srv/opened3"), "alice");
+    expect(resolveInWorkspace(opened, "src/main.ts", "alice")).toBe(path.resolve("/srv/opened3/src/main.ts"));
+  });
+
+  // With GitHub login, knowing another user's workspace path must not be enough to read it.
+  it("does not let one user reach a workspace another user opened", () => {
+    const opened = allowWorkspaceRoot(path.resolve("/srv/alice-project"), "gh:1");
+    expect(isWorkspaceRoot(opened, "gh:2")).toBe(false);
+    expect(() => resolveInWorkspace(opened, "secrets.env", "gh:2")).toThrow(/Unknown workspace root/);
+
+    allowWorkspaceRoot(opened, "gh:2");
+    expect(isWorkspaceRoot(opened, "gh:1")).toBe(true);
+    expect(isWorkspaceRoot(opened, "gh:2")).toBe(true);
   });
 });

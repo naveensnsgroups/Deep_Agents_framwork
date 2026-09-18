@@ -9,13 +9,17 @@
       "image": "PLACEHOLDER_REPLACED_BY_GITHUB_ACTIONS",
       "essential": true,
       "memoryReservation": 1024,
-      "portMappings": [{ "containerPort": 4000, "hostPort": 80, "protocol": "tcp" }],
+      "portMappings": [
+        { "containerPort": 4000, "hostPort": 80, "protocol": "tcp" }
+      ],
       "stopTimeout": 30,
       "environment": [
         { "name": "NODE_ENV", "value": "production" },
         { "name": "PORT", "value": "4000" },
         { "name": "CLOUD_MODE", "value": "1" },
         { "name": "ALLOWED_ORIGINS", "value": "http://13.202.56.144" },
+        { "name": "PUBLIC_URL", "value": "http://13.202.56.144" },
+        { "name": "ALLOWED_GITHUB_USERS", "value": "naveensnsgroups" },
         { "name": "SANDBOX_PROVIDER", "value": "e2b" },
         { "name": "MONGODB_DB", "value": "deepagents" },
         { "name": "ANTHROPIC_MODEL", "value": "anthropic:claude-sonnet-4-6" },
@@ -24,9 +28,9 @@
         { "name": "OPENROUTER_MODEL", "value": "anthropic/claude-sonnet-4.6" }
       ],
       "secrets": [
-        { "name": "AUTH_TOKEN", "valueFrom": "arn:aws:ssm:ap-south-1:774697186948:parameter/deep-agents/AUTH_TOKEN" },
-        { "name": "GOOGLE_API_KEY", "valueFrom": "arn:aws:ssm:ap-south-1:774697186948:parameter/deep-agents/GOOGLE_API_KEY" },
-        { "name": "OPENROUTER_API_KEY", "valueFrom": "arn:aws:ssm:ap-south-1:774697186948:parameter/deep-agents/OPENROUTER_API_KEY" },
+        { "name": "GITHUB_OAUTH_CLIENT_ID", "valueFrom": "arn:aws:ssm:ap-south-1:774697186948:parameter/deep-agents/GITHUB_OAUTH_CLIENT_ID" },
+        { "name": "GITHUB_OAUTH_CLIENT_SECRET", "valueFrom": "arn:aws:ssm:ap-south-1:774697186948:parameter/deep-agents/GITHUB_OAUTH_CLIENT_SECRET" },
+        { "name": "APP_SECRET", "valueFrom": "arn:aws:ssm:ap-south-1:774697186948:parameter/deep-agents/APP_SECRET" },
         { "name": "E2B_API_KEY", "valueFrom": "arn:aws:ssm:ap-south-1:774697186948:parameter/deep-agents/E2B_API_KEY" },
         { "name": "MONGODB_URI", "valueFrom": "arn:aws:ssm:ap-south-1:774697186948:parameter/deep-agents/MONGODB_URI" }
       ],
@@ -39,11 +43,7 @@
       },
       "logConfiguration": {
         "logDriver": "awslogs",
-        "options": {
-          "awslogs-group": "/ecs/deep-agents-app",
-          "awslogs-region": "ap-south-1",
-          "awslogs-stream-prefix": "app"
-        }
+        "options": { "awslogs-group": "/ecs/deep-agents-app", "awslogs-region": "ap-south-1", "awslogs-stream-prefix": "app" }
       }
     }
   ]

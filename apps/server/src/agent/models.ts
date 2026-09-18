@@ -10,10 +10,37 @@ import type { ModelId } from "@deepagents-ide/shared";
  * fix yet, so Gemini requests are routed through our own /gemini-proxy, which
  * repairs the schema in-flight before it reaches Google's API.
  */
-export function resolveModel(model: ModelId, apiKey?: string) {
+const PROVIDER_LABELS: Record<string, string> = {
+  anthropic: "Anthropic",
+  "google-genai": "Google Gemini",
+  openai: "OpenAI",
+  openrouter: "OpenRouter",
+};
+
+export function providerOf(model: ModelId): string {
+  const separator = model.indexOf(":");
+  return separator === -1 ? "" : model.slice(0, separator);
+}
+
+export class MissingApiKeyError extends Error {}
+
+/**
+ * `allowServerKeys: false` is the GitHub-login setting: each user runs on their own key, so the
+ * server's environment keys must never be used on their behalf — not as a fallback when their
+ * key is missing, and not through a bare model name that LangChain would resolve from the
+ * environment by itself.
+ */
+export function resolveModel(model: ModelId, apiKey?: string, allowServerKeys = true) {
   const separator = model.indexOf(":");
   const provider = separator === -1 ? "" : model.slice(0, separator);
   const modelName = separator === -1 ? model : model.slice(separator + 1);
+
+  if (!allowServerKeys) {
+    if (!(provider in PROVIDER_LABELS)) throw new MissingApiKeyError(`Unsupported model "${model}".`);
+    if (!apiKey) {
+      throw new MissingApiKeyError(`No ${PROVIDER_LABELS[provider]} API key saved. Add yours in "My keys", or enter one when opening the workspace.`);
+    }
+  }
 
   if (provider === "google-genai") {
     const port = process.env.PORT ?? "4000";

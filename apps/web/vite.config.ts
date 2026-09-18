@@ -17,6 +17,7 @@ export default defineConfig({
     proxy: {
       '/api': backendTarget,
       '/gemini-proxy': backendTarget,
+      '/auth': backendTarget,
       '/ws': { target: backendTarget, ws: true },
       '/pty': { target: backendTarget, ws: true },
     },

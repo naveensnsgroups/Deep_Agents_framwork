@@ -66,6 +66,11 @@ export interface E2BSandboxOptions {
   cwd?: string;
   /** Overrides EGRESS_ALLOWLIST. An empty array blocks all outbound traffic. */
   egressAllowlist?: string[];
+  /**
+   * Reattach to this already-running sandbox instead of booting a new one. Its network policy
+   * and files are whatever it was created with; only the lifetime is refreshed.
+   */
+  sandboxId?: string;
 }
 
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
@@ -120,23 +125,36 @@ export class E2BSandbox extends BaseSandbox {
   }
 
   private ensure(): Promise<Sandbox> {
-    this.booting ??= Sandbox.create(this.options.template ?? "base", {
-      apiKey: this.options.apiKey ?? process.env.E2B_API_KEY,
-      timeoutMs: this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-      // `denyOut: allTraffic` with an `allowOut` list is E2B's documented way to express a
-      // default-deny egress policy; without `denyOut` the allow list is additive and
-      // everything else still gets out.
-      network: {
-        allowOut: this.options.egressAllowlist ?? EGRESS_ALLOWLIST,
-        denyOut: ({ allTraffic }) => [allTraffic],
-      },
-    }).then((sandbox) => {
+    const apiKey = this.options.apiKey ?? process.env.E2B_API_KEY;
+    const timeoutMs = this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+
+    this.booting ??= (
+      this.options.sandboxId
+        ? // connect only ever lengthens a running sandbox's deadline, so it is set explicitly
+          // afterwards — a sandbox left with seconds to live would otherwise die mid-reconnect.
+          Sandbox.connect(this.options.sandboxId, { apiKey, timeoutMs }).then(async (sandbox) => {
+            await sandbox.setTimeout(timeoutMs);
+            return sandbox;
+          })
+        : Sandbox.create(this.options.template ?? "base", {
+            apiKey,
+            timeoutMs,
+            // `denyOut: allTraffic` with an `allowOut` list is E2B's documented way to express a
+            // default-deny egress policy; without `denyOut` the allow list is additive and
+            // everything else still gets out.
+            network: {
+              allowOut: this.options.egressAllowlist ?? EGRESS_ALLOWLIST,
+              denyOut: ({ allTraffic }) => [allTraffic],
+            },
+          })
+    ).then((sandbox) => {
       this.sandbox = sandbox;
-      const timeoutMs = this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
       this.refresher = setInterval(() => void this.keepAlive(), Math.min(KEEP_ALIVE_EVERY_MS, timeoutMs / 3));
       this.refresher.unref();
       return sandbox;
     });
+    // A failed boot or reconnect must not be cached, or every later call would reuse the error.
+    this.booting.catch(() => (this.booting = undefined));
     return this.booting;
   }
 
@@ -265,6 +283,22 @@ export class E2BSandbox extends BaseSandbox {
     r.files?.forEach((f) => (f.path = fromSandboxPath(root, f.path)));
     r.matches?.forEach((m) => (m.path = fromSandboxPath(root, m.path)));
     return result;
+  }
+
+  /**
+   * Lets go of the sandbox without killing it: stops refreshing its lifetime and leaves it
+   * `remainingMs` to live. Used on server shutdown so a user whose tab reconnects to the next
+   * server process gets their sandbox back; if nobody does, E2B reclaims it when that runs out.
+   */
+  async detach(remainingMs: number): Promise<void> {
+    clearInterval(this.refresher);
+    this.refresher = undefined;
+    const sandbox = this.sandbox;
+    this.sandbox = undefined;
+    this.booting = undefined;
+    await sandbox?.setTimeout(remainingMs).catch(() => {
+      // Already gone — nothing to leave running.
+    });
   }
 
   /** Ends the billed session. Nothing else reclaims it before the idle timeout. */

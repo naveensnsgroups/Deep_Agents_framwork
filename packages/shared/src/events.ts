@@ -6,7 +6,50 @@ export interface ProviderOption {
   defaultModel: string;
   /** Whether the server has a key for this provider in its env; the key itself is never sent. */
   serverKey: boolean;
+  /** Whether the signed-in user has saved their own key for this provider. Only under GitHub login. */
+  userKey?: boolean;
   keyPlaceholder: string;
+}
+
+/**
+ * "oauth" — GitHub login, per-user keys and data. "token" — one shared AUTH_TOKEN, everyone is
+ * the same user. "none" — local development with no authentication.
+ */
+export type AuthMode = "oauth" | "token" | "none";
+
+export interface HealthInfo {
+  ok: boolean;
+  authRequired: boolean;
+  authMode: AuthMode;
+}
+
+export interface SessionUser {
+  id: string;
+  login: string;
+  name?: string;
+  avatarUrl?: string;
+}
+
+/** What a user can save in "My keys": one entry per model provider, plus a GitHub PAT. */
+export type UserKeyName = "anthropic" | "google-genai" | "openai" | "openrouter" | "github";
+
+export interface KeyStatus {
+  name: UserKeyName;
+  label: string;
+  saved: boolean;
+  /** ISO timestamp of the last save. */
+  updatedAt?: string;
+}
+
+export interface MeResponse {
+  user: SessionUser;
+  authMode: AuthMode;
+}
+
+export interface KeysResponse {
+  keys: KeyStatus[];
+  /** Whether GitHub login granted repository access, used for clone and push when no PAT is saved. */
+  githubLinked: boolean;
 }
 
 export interface ActionRequest {

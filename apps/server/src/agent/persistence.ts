@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { MongoClient } from "mongodb";
+import { MongoClient, type Db } from "mongodb";
 import { MongoDBSaver, MongoDBStore } from "@langchain/langgraph-checkpoint-mongodb";
 import { SqliteSaver } from "@langchain/langgraph-checkpoint-sqlite";
 import type { BaseCheckpointSaver, BaseStore } from "@langchain/langgraph";
@@ -19,6 +19,8 @@ export interface Persistence {
   checkpointer: BaseCheckpointSaver;
   /** Backend mounted at /memories/. */
   memories: AnyBackendProtocol;
+  /** The app's own collections (saved keys, sandbox records). Absent when running on local files. */
+  db?: Db;
   close(): Promise<void>;
 }
 
@@ -55,6 +57,7 @@ async function connectMongo(uri: string): Promise<Persistence> {
     kind: "mongodb",
     checkpointer,
     memories: memoriesBackend(store),
+    db: client.db(dbName),
     close: () => client.close(),
   };
 }

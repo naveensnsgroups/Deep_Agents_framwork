@@ -1,6 +1,6 @@
 import { WebSocketServer, WebSocket } from "ws";
 import * as pty from "node-pty";
-import { selectSubprotocol } from "./auth.js";
+import { selectSubprotocol, userForUpgrade } from "./auth.js";
 import { keepAlive } from "./heartbeat.js";
 import { isWorkspaceRoot } from "./workspaceRegistry.js";
 import type { E2BSandbox } from "./agent/e2bSandbox.js";
@@ -123,7 +123,8 @@ export function createTerminalWebSocketServer() {
   const wss = new WebSocketServer({ noServer: true, handleProtocols: selectSubprotocol });
   keepAlive(wss);
 
-  wss.on("connection", (ws) => {
+  wss.on("connection", (ws, request) => {
+    const owner = userForUpgrade(request).id;
     let ptyProcess: pty.IPty | undefined;
     let sandboxPty: SandboxPty | undefined;
 
@@ -140,7 +141,8 @@ export function createTerminalWebSocketServer() {
 
         // In sandbox mode the shell belongs in the microVM the agent is working in — a PTY
         // on this server would show an empty machine and none of the agent's edits.
-        const sandbox = sandboxForRoot(msg.cwd);
+        // Only this user's own sandbox — a root is just a string the client sends.
+        const sandbox = sandboxForRoot(msg.cwd, owner);
         if (sandbox) {
           sandboxPty = openSandboxPty(ws, sandbox, msg.cols, msg.rows);
           return;
@@ -148,7 +150,7 @@ export function createTerminalWebSocketServer() {
 
         // `cwd` arrives from the client, so it is checked against the workspaces this server
         // actually opened — otherwise `cwd: "/"` was a shell at the filesystem root.
-        if (!isWorkspaceRoot(msg.cwd)) {
+        if (!isWorkspaceRoot(msg.cwd, owner)) {
           ws.send(JSON.stringify({ type: "data", data: "Terminal unavailable: no open workspace at that path.\r\n" }));
           return;
         }
