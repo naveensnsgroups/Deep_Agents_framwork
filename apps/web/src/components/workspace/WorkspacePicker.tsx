@@ -197,26 +197,30 @@ export function WorkspacePicker({ onOpen }: Props) {
         </div>
       </div>
 
-      <label className={labelClass}>Project folder or GitHub repo</label>
+      <label className={labelClass}>{signedIn ? "GitHub repo" : "Project folder or GitHub repo"}</label>
       <div className="flex gap-2">
         <input
           type="text"
-          placeholder="E:\\path\\to\\your\\project  or  https://github.com/user/repo"
+          placeholder={signedIn ? "https://github.com/user/repo" : "E:\\path\\to\\your\\project  or  https://github.com/user/repo"}
           value={projectRoot}
           onChange={(e) => setProjectRoot(e.target.value)}
           className={`${fieldClass} flex-1`}
         />
-        <button
-          type="button"
-          onClick={() => setBrowseTarget("project")}
-          className="cursor-pointer rounded-md border border-neutral-700 light:border-neutral-300 bg-neutral-800 light:bg-neutral-100 px-3 text-xs text-neutral-200 light:text-neutral-800 hover:bg-neutral-700 light:hover:bg-neutral-200"
-        >
-          Browse…
-        </button>
+        {!signedIn && (
+          <button
+            type="button"
+            onClick={() => setBrowseTarget("project")}
+            className="cursor-pointer rounded-md border border-neutral-700 light:border-neutral-300 bg-neutral-800 light:bg-neutral-100 px-3 text-xs text-neutral-200 light:text-neutral-800 hover:bg-neutral-700 light:hover:bg-neutral-200"
+          >
+            Browse…
+          </button>
+        )}
       </div>
       <p className="-mt-1 text-[11px] text-neutral-500">
-        A GitHub URL is cloned server-side (append <code>#branch-name</code> for a specific branch) — for when the
-        backend can't see your local disk, e.g. a cloud deployment.
+        {signedIn
+          ? <>This server can't see your computer's disk — paste a GitHub URL and it's cloned server-side (append <code>#branch-name</code> for a specific branch).</>
+          : <>A GitHub URL is cloned server-side (append <code>#branch-name</code> for a specific branch) — for when the
+            backend can't see your local disk, e.g. a cloud deployment.</>}
       </p>
 
       <label className={labelClass}>Provider</label>
