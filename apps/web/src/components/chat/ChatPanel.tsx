@@ -29,12 +29,12 @@ const STARTERS = [
 function EmptyState({ onPick }: { onPick: (text: string) => void }) {
   return (
     <div className="flex flex-col gap-2 py-2">
-      <p className="text-[13px] text-neutral-400">Start with one of these, or type your own:</p>
+      <p className="text-[13px] text-neutral-400 light:text-neutral-600">Start with one of these, or type your own:</p>
       {STARTERS.map((s) => (
         <button
           key={s}
           onClick={() => onPick(s)}
-          className="cursor-pointer rounded-md border border-neutral-800 bg-neutral-900 px-2.5 py-2 text-left text-[13px] leading-snug text-neutral-300 hover:border-neutral-700 hover:text-neutral-100"
+          className="cursor-pointer rounded-md border border-neutral-800 light:border-neutral-200 bg-neutral-900 light:bg-neutral-50 px-2.5 py-2 text-left text-[13px] leading-snug text-neutral-300 light:text-neutral-700 hover:border-neutral-700 light:hover:border-neutral-300 hover:text-neutral-100 light:hover:text-neutral-900"
         >
           {s}
         </button>
@@ -128,14 +128,14 @@ export function ChatPanel({ timeline, busy, streaming, projectRoot, onSend, onSt
                           cancelEdit();
                         }
                       }}
-                      className="w-full resize-none rounded-md border border-blue-700 bg-neutral-900 p-2 font-sans text-[13px] text-neutral-100 outline-none"
+                      className="w-full resize-none rounded-md border border-blue-700 light:border-blue-300 bg-neutral-900 light:bg-neutral-50 p-2 font-sans text-[13px] text-neutral-100 light:text-neutral-900 outline-none"
                       rows={Math.min(6, Math.max(2, editDraft.split("\n").length))}
                     />
                     <div className="flex gap-1.5">
                       <button
                         onClick={cancelEdit}
                         title="Cancel"
-                        className="flex cursor-pointer items-center gap-1 rounded-md border border-neutral-700 bg-neutral-800 px-2 py-1 text-[11px] text-neutral-300 hover:bg-neutral-700"
+                        className="flex cursor-pointer items-center gap-1 rounded-md border border-neutral-700 light:border-neutral-300 bg-neutral-800 light:bg-neutral-100 px-2 py-1 text-[11px] text-neutral-300 light:text-neutral-700 hover:bg-neutral-700 light:hover:bg-neutral-200"
                       >
                         <X className="h-3 w-3" />
                         Cancel
@@ -144,7 +144,7 @@ export function ChatPanel({ timeline, busy, streaming, projectRoot, onSend, onSt
                         onClick={() => saveEdit(item.userIndex)}
                         disabled={!editDraft.trim()}
                         title="Save and resend (discards everything after this message)"
-                        className="flex cursor-pointer items-center gap-1 rounded-md bg-blue-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-400"
+                        className="flex cursor-pointer items-center gap-1 rounded-md bg-blue-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-neutral-700 light:disabled:bg-neutral-200 disabled:text-neutral-400 light:disabled:text-neutral-600"
                       >
                         <Check className="h-3 w-3" />
                         Save &amp; resend
@@ -163,11 +163,11 @@ export function ChatPanel({ timeline, busy, streaming, projectRoot, onSend, onSt
                       onClick={() => startEdit(item.userIndex, item.content)}
                       disabled={busy}
                       title="Edit and resend"
-                      className="cursor-pointer text-neutral-600 opacity-0 transition-opacity hover:text-neutral-300 group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-0"
+                      className="cursor-pointer text-neutral-600 opacity-0 transition-opacity hover:text-neutral-300 light:hover:text-neutral-700 group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-0"
                     >
                       <Pencil className="h-3 w-3" />
                     </button>
-                    <div className="whitespace-pre-wrap rounded-lg bg-blue-900/70 px-2.5 py-2 text-[13px] leading-relaxed text-neutral-100">
+                    <div className="whitespace-pre-wrap rounded-lg bg-blue-900/70 light:bg-blue-100 px-2.5 py-2 text-[13px] leading-relaxed text-neutral-100 light:text-neutral-900">
                       {item.content}
                     </div>
                   </div>
@@ -185,13 +185,13 @@ export function ChatPanel({ timeline, busy, streaming, projectRoot, onSend, onSt
                       <button
                         onClick={() => copyText(item.content, item.id)}
                         title="Copy message"
-                        className="cursor-pointer text-neutral-600 opacity-0 transition-opacity hover:text-neutral-300 group-hover:opacity-100"
+                        className="cursor-pointer text-neutral-600 opacity-0 transition-opacity hover:text-neutral-300 light:hover:text-neutral-700 group-hover:opacity-100"
                       >
-                        {copiedId === item.id ? <CopyCheck className="h-3 w-3 text-green-400" /> : <Copy className="h-3 w-3" />}
+                        {copiedId === item.id ? <CopyCheck className="h-3 w-3 text-green-400 light:text-green-600" /> : <Copy className="h-3 w-3" />}
                       </button>
                     )}
                   </div>
-                  <div className="max-w-full overflow-hidden rounded-lg bg-neutral-800 px-2.5 py-2">
+                  <div className="max-w-full overflow-hidden rounded-lg bg-neutral-800 light:bg-neutral-100 px-2.5 py-2">
                     <Markdown content={item.content} />
                   </div>
                 </div>
@@ -235,7 +235,7 @@ export function ChatPanel({ timeline, busy, streaming, projectRoot, onSend, onSt
         {!hasConversation && !busy && <EmptyState onPick={(text) => setDraft(text)} />}
         {busy && <div className="text-[13px] italic text-neutral-500">Agent is working…</div>}
       </div>
-      <div className="flex-none border-t border-neutral-800 p-2.5">
+      <div className="flex-none border-t border-neutral-800 light:border-neutral-200 p-2.5">
         <div className="flex items-end gap-2">
           <textarea
             ref={inputRef}
@@ -250,7 +250,7 @@ export function ChatPanel({ timeline, busy, streaming, projectRoot, onSend, onSt
             }}
             placeholder="Ask the agent…"
             disabled={busy}
-            className="max-h-40 min-h-[36px] flex-1 resize-none overflow-y-auto rounded-md border border-neutral-700 bg-neutral-900 px-2 py-2 font-sans text-[13px] leading-snug text-neutral-100 outline-none focus:border-blue-500 disabled:opacity-60"
+            className="max-h-40 min-h-[36px] flex-1 resize-none overflow-y-auto rounded-md border border-neutral-700 light:border-neutral-300 bg-neutral-900 light:bg-neutral-50 px-2 py-2 font-sans text-[13px] leading-snug text-neutral-100 light:text-neutral-900 outline-none focus:border-blue-500 disabled:opacity-60"
           />
           {streaming ? (
             <button
@@ -265,7 +265,7 @@ export function ChatPanel({ timeline, busy, streaming, projectRoot, onSend, onSt
               onClick={submit}
               disabled={busy || !draft.trim()}
               title="Send (Enter)"
-              className="flex h-9 flex-none cursor-pointer items-center justify-center rounded-md bg-blue-600 px-3 text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-500"
+              className="flex h-9 flex-none cursor-pointer items-center justify-center rounded-md bg-blue-600 px-3 text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-neutral-700 light:disabled:bg-neutral-200 disabled:text-neutral-500"
             >
               <SendHorizontal className="h-4 w-4" />
             </button>

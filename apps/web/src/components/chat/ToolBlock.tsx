@@ -30,23 +30,23 @@ export function ToolBlock({ result }: { result: ToolResultInfo }) {
   const isFailed = failed(result);
 
   return (
-    <div className={`mb-1.5 overflow-hidden rounded-md border ${isFailed ? "border-red-900/60" : "border-neutral-800"}`}>
+    <div className={`mb-1.5 overflow-hidden rounded-md border ${isFailed ? "border-red-900/60 light:border-red-200" : "border-neutral-800 light:border-neutral-200"}`}>
       <button
-        className="flex w-full cursor-pointer items-center gap-2 border-none bg-neutral-900 px-2.5 py-1.5 text-left text-xs text-neutral-200 hover:bg-neutral-800"
+        className="flex w-full cursor-pointer items-center gap-2 border-none bg-neutral-900 light:bg-neutral-50 px-2.5 py-1.5 text-left text-xs text-neutral-200 light:text-neutral-800 hover:bg-neutral-800 light:hover:bg-neutral-100"
         onClick={() => setOpen((o) => !o)}
       >
-        <ToolIcon name={result.name} className="h-3.5 w-3.5 flex-none text-neutral-400" />
+        <ToolIcon name={result.name} className="h-3.5 w-3.5 flex-none text-neutral-400 light:text-neutral-600" />
         <span className="font-semibold">{result.name}</span>
         {summary && <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-neutral-500">{summary}</span>}
         {isFailed ? (
-          <XCircle className="h-3.5 w-3.5 flex-none text-red-400" />
+          <XCircle className="h-3.5 w-3.5 flex-none text-red-400 light:text-red-600" />
         ) : (
-          <CheckCircle2 className="h-3.5 w-3.5 flex-none text-green-500/70" />
+          <CheckCircle2 className="h-3.5 w-3.5 flex-none text-green-500/70 light:text-green-600" />
         )}
         {open ? <ChevronDown className="h-3.5 w-3.5 text-neutral-600" /> : <ChevronRight className="h-3.5 w-3.5 text-neutral-600" />}
       </button>
       {open && (
-        <div className="border-t border-neutral-800 bg-neutral-950 px-2.5 py-2">
+        <div className="border-t border-neutral-800 light:border-neutral-200 bg-neutral-950 light:bg-white px-2.5 py-2">
           <ToolActionBody name={result.name} args={result.args} result={result.result} />
         </div>
       )}

@@ -1,13 +1,22 @@
 import { useEffect, useRef } from "react";
-import { Terminal } from "@xterm/xterm";
+import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { X } from "lucide-react";
 import { PTY_URL, authProtocols } from "../../lib/ws-client";
+import { useTheme, type Theme } from "../../lib/theme";
 import "@xterm/xterm/css/xterm.css";
 
 interface Props {
   projectRoot: string;
   onClose: () => void;
+}
+
+/** xterm renders its own canvas, so its colors are a runtime option, not CSS — matched to the
+ * app's dark (neutral-950) and light (white) surfaces. */
+function xtermTheme(theme: Theme): ITheme {
+  return theme === "light"
+    ? { background: "#ffffff", foreground: "#1a1a1a", cursor: "#1a1a1a" }
+    : { background: "#0a0a0a", foreground: "#e5e5e5" };
 }
 
 /**
@@ -18,6 +27,8 @@ interface Props {
  */
 export function TerminalPanel({ projectRoot, onClose }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const termRef = useRef<Terminal | null>(null);
+  const [theme] = useTheme();
 
   useEffect(() => {
     const container = containerRef.current;
@@ -27,8 +38,9 @@ export function TerminalPanel({ projectRoot, onClose }: Props) {
       convertEol: true,
       fontSize: 13,
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-      theme: { background: "#0a0a0a", foreground: "#e5e5e5" },
+      theme: xtermTheme(theme),
     });
+    termRef.current = term;
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(container);
@@ -61,14 +73,24 @@ export function TerminalPanel({ projectRoot, onClose }: Props) {
       dataListener.dispose();
       ws.close();
       term.dispose();
+      termRef.current = null;
     };
+    // theme is intentionally excluded — recreating the terminal on every toggle would kill the
+    // running shell process just to change colors. See the effect below for a live update instead.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectRoot]);
 
+  // Applies a theme change to the already-open terminal without touching the shell process —
+  // xterm.js's `options` setter re-renders existing content with the new palette in place.
+  useEffect(() => {
+    if (termRef.current) termRef.current.options.theme = xtermTheme(theme);
+  }, [theme]);
+
   return (
-    <div className="flex h-full min-h-0 flex-col border-t border-neutral-800 bg-[#0a0a0a]">
-      <div className="flex flex-none items-center justify-between border-b border-neutral-800 bg-neutral-900 px-2.5 py-1">
+    <div className="flex h-full min-h-0 flex-col border-t border-neutral-800 light:border-neutral-200 bg-[#0a0a0a] light:bg-white">
+      <div className="flex flex-none items-center justify-between border-b border-neutral-800 light:border-neutral-200 bg-neutral-900 light:bg-neutral-50 px-2.5 py-1">
         <span className="text-[11px] uppercase tracking-wide text-neutral-500">Terminal</span>
-        <button onClick={onClose} title="Close terminal" className="cursor-pointer text-neutral-500 hover:text-white">
+        <button onClick={onClose} title="Close terminal" className="cursor-pointer text-neutral-500 hover:text-white light:hover:text-neutral-900">
           <X className="h-3.5 w-3.5" />
         </button>
       </div>

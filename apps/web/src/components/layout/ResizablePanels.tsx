@@ -125,22 +125,22 @@ export function ResizablePanels({ sidebar, editor, chat }: Props) {
         <>
           {/* No overflow-y-auto here — FileTree owns its own scroll region internally so
               its filter toolbar can stay sticky, rather than scrolling away with the list. */}
-          <div style={{ width: sidebarWidth }} className="h-full min-h-0 min-w-0 shrink-0 bg-neutral-900 text-neutral-300">
+          <div style={{ width: sidebarWidth }} className="h-full min-h-0 min-w-0 shrink-0 bg-neutral-900 light:bg-neutral-50 text-neutral-300 light:text-neutral-700">
             {sidebar}
           </div>
           <div
             onMouseDown={() => startDrag("sidebar")}
-            className="w-1 shrink-0 cursor-col-resize bg-neutral-800 transition-colors hover:bg-blue-600"
+            className="w-1 shrink-0 cursor-col-resize bg-neutral-800 light:bg-neutral-100 transition-colors hover:bg-blue-600"
           />
         </>
       )}
 
       <div className="flex min-w-[240px] flex-1 flex-col overflow-hidden">
-        <div className="flex flex-none items-center gap-2 border-b border-neutral-800 bg-neutral-900 px-2 py-1">
+        <div className="flex flex-none items-center gap-2 border-b border-neutral-800 light:border-neutral-200 bg-neutral-900 light:bg-neutral-50 px-2 py-1">
           <button
             onClick={() => setSidebarOpen((o) => !o)}
             title={sidebarOpen ? "Hide file tree" : "Show file tree"}
-            className="flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-xs text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200"
+            className="flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-xs text-neutral-400 light:text-neutral-600 hover:bg-neutral-800 light:hover:bg-neutral-100 hover:text-neutral-200 light:hover:text-neutral-800"
           >
             {sidebarOpen ? <PanelLeftClose className="h-3.5 w-3.5" /> : <PanelLeftOpen className="h-3.5 w-3.5" />}
             Files
@@ -149,7 +149,7 @@ export function ResizablePanels({ sidebar, editor, chat }: Props) {
           <button
             onClick={() => setChatOpen((o) => !o)}
             title={chatOpen ? "Hide chat" : "Show chat"}
-            className="flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-xs text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200"
+            className="flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-xs text-neutral-400 light:text-neutral-600 hover:bg-neutral-800 light:hover:bg-neutral-100 hover:text-neutral-200 light:hover:text-neutral-800"
           >
             Chat
             {chatOpen ? <PanelRightClose className="h-3.5 w-3.5" /> : <PanelRightOpen className="h-3.5 w-3.5" />}
@@ -162,7 +162,7 @@ export function ResizablePanels({ sidebar, editor, chat }: Props) {
         <>
           <div
             onMouseDown={() => startDrag("chat")}
-            className="w-1 shrink-0 cursor-col-resize bg-neutral-800 transition-colors hover:bg-blue-600"
+            className="w-1 shrink-0 cursor-col-resize bg-neutral-800 light:bg-neutral-100 transition-colors hover:bg-blue-600"
           />
           <div style={{ width: chatWidth }} className="flex min-w-0 shrink-0 flex-col">
             {chat}

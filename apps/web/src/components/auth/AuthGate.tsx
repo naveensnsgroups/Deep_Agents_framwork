@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Github, KeyRound, Loader2 } from "lucide-react";
 import { clearToken, fetchHealth, fetchMe, getToken, setToken, startGithubLogin, verifyToken } from "../../lib/auth";
 import { SessionContext, type SessionInfo } from "../../lib/session";
+import { ThemeToggle } from "../layout/ThemeToggle";
 
 type Phase = "checking" | "github-login" | "token-login" | "open";
 
@@ -67,7 +68,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
   if (phase === "checking") {
     return (
-      <div className="flex h-screen items-center justify-center bg-neutral-950">
+      <div className="flex h-screen items-center justify-center bg-neutral-950 light:bg-white">
         <Loader2 className="h-5 w-5 animate-spin text-neutral-600" />
       </div>
     );
@@ -75,9 +76,12 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
   if (phase === "github-login") {
     return (
-      <div className="flex h-screen items-center justify-center bg-neutral-950 px-4">
-        <div className="w-full max-w-sm rounded-lg border border-neutral-800 bg-neutral-900 p-6">
-          <h1 className="mb-1 text-base font-semibold text-neutral-100">Code Migration Agents</h1>
+      <div className="relative flex h-screen items-center justify-center bg-neutral-950 light:bg-white px-4">
+        <div className="absolute right-4 top-4">
+          <ThemeToggle />
+        </div>
+        <div className="w-full max-w-sm rounded-lg border border-neutral-800 light:border-neutral-200 bg-neutral-900 light:bg-neutral-50 p-6">
+          <h1 className="mb-1 text-base font-semibold text-neutral-100 light:text-neutral-900">Code Migration Agents</h1>
           <p className="mb-5 text-xs text-neutral-500">
             Sign in with GitHub. Your API keys, projects and conversations are private to your account.
           </p>
@@ -87,12 +91,12 @@ export function AuthGate({ children }: { children: ReactNode }) {
               setError("");
               startGithubLogin();
             }}
-            className="flex w-full cursor-pointer items-center justify-center gap-2 rounded bg-neutral-100 px-3 py-2 text-sm font-medium text-neutral-900 hover:bg-white"
+            className="flex w-full cursor-pointer items-center justify-center gap-2 rounded bg-neutral-100 px-3 py-2 text-sm font-medium text-neutral-900 hover:bg-white light:bg-neutral-900 light:text-white light:hover:bg-neutral-800"
           >
             <Github className="h-4 w-4" />
             Sign in with GitHub
           </button>
-          {error ? <p className="mt-3 text-xs text-red-400">{error}</p> : null}
+          {error ? <p className="mt-3 text-xs text-red-400 light:text-red-600">{error}</p> : null}
           <p className="mt-4 text-[11px] leading-relaxed text-neutral-600">
             GitHub will ask to grant access to your repositories. That lets the agent clone private repos and push changes
             you approve, without a personal access token.
@@ -134,14 +138,17 @@ function TokenLogin({ onUnlocked }: { onUnlocked: () => void }) {
   }
 
   return (
-    <div className="flex h-screen items-center justify-center bg-neutral-950 px-4">
-      <form onSubmit={submit} className="w-full max-w-sm rounded-lg border border-neutral-800 bg-neutral-900 p-6">
+    <div className="relative flex h-screen items-center justify-center bg-neutral-950 light:bg-white px-4">
+      <div className="absolute right-4 top-4">
+        <ThemeToggle />
+      </div>
+      <form onSubmit={submit} className="w-full max-w-sm rounded-lg border border-neutral-800 light:border-neutral-200 bg-neutral-900 light:bg-neutral-50 p-6">
         <div className="mb-1 flex items-center gap-2">
-          <KeyRound className="h-4 w-4 text-neutral-400" />
-          <h1 className="text-sm font-medium text-neutral-200">Access token</h1>
+          <KeyRound className="h-4 w-4 text-neutral-400 light:text-neutral-600" />
+          <h1 className="text-sm font-medium text-neutral-200 light:text-neutral-800">Access token</h1>
         </div>
         <p className="mb-4 text-xs text-neutral-500">
-          This deployment is protected. Enter the token set as <code className="text-neutral-400">AUTH_TOKEN</code> on
+          This deployment is protected. Enter the token set as <code className="text-neutral-400 light:text-neutral-600">AUTH_TOKEN</code> on
           the server.
         </p>
 
@@ -151,15 +158,15 @@ function TokenLogin({ onUnlocked }: { onUnlocked: () => void }) {
           onChange={(e) => setInput(e.target.value)}
           autoFocus
           placeholder="Token"
-          className="w-full rounded border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm text-neutral-200 outline-none placeholder:text-neutral-600 focus:border-neutral-500"
+          className="w-full rounded border border-neutral-700 light:border-neutral-300 bg-neutral-950 light:bg-white px-3 py-2 text-sm text-neutral-200 light:text-neutral-800 outline-none placeholder:text-neutral-600 focus:border-neutral-500 light:focus:border-neutral-400"
         />
 
-        {error ? <p className="mt-2 text-xs text-red-400">{error}</p> : null}
+        {error ? <p className="mt-2 text-xs text-red-400 light:text-red-600">{error}</p> : null}
 
         <button
           type="submit"
           disabled={!input.trim() || submitting}
-          className="mt-4 flex w-full cursor-pointer items-center justify-center gap-2 rounded bg-neutral-100 px-3 py-2 text-sm font-medium text-neutral-900 disabled:cursor-not-allowed disabled:opacity-40"
+          className="mt-4 flex w-full cursor-pointer items-center justify-center gap-2 rounded bg-neutral-100 px-3 py-2 text-sm font-medium text-neutral-900 disabled:cursor-not-allowed disabled:opacity-40 light:bg-neutral-900 light:text-white"
         >
           {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
           Unlock

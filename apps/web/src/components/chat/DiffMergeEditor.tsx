@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { DiffEditor } from "@monaco-editor/react";
 import type { editor, IDisposable } from "monaco-editor";
+import { useTheme } from "../../lib/theme";
 
 interface Props {
   original: string;
@@ -15,6 +16,9 @@ interface Props {
  * lets you fix just the changed lines instead of retyping the whole args object.
  */
 export function DiffMergeEditor({ original, modified, language, onChange }: Props) {
+  // Monaco's theme is a runtime option, not CSS — it can't follow the app's `light:` variant.
+  const [theme] = useTheme();
+
   // Approving immediately unmounts this component (the parent card collapses to its
   // resolved view in the same render), which can race Monaco's own diff-widget teardown
   // and throw "TextModel got disposed before DiffEditorWidget model got reset" — a known
@@ -33,10 +37,10 @@ export function DiffMergeEditor({ original, modified, language, onChange }: Prop
   useEffect(() => () => listenerRef.current?.dispose(), []);
 
   return (
-    <div className="h-56 overflow-hidden rounded border border-amber-800">
+    <div className="h-56 overflow-hidden rounded border border-amber-800 light:border-amber-300">
       <DiffEditor
         height="100%"
-        theme="vs-dark"
+        theme={theme === "light" ? "light" : "vs-dark"}
         language={language}
         original={original}
         modified={modified}

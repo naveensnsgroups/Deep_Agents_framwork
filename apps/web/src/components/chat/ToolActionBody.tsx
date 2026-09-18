@@ -5,7 +5,7 @@
  * so an approval card and its completed counterpart never drift apart.
  */
 export function DiffLines({ text, sign }: { text: string; sign: "+" | "-" }) {
-  const className = sign === "+" ? "bg-green-900/30 text-green-200" : "bg-red-900/30 text-red-200";
+  const className = sign === "+" ? "bg-green-900/30 light:bg-green-100 text-green-200 light:text-green-800" : "bg-red-900/30 light:bg-red-100 text-red-200 light:text-red-800";
   return (
     <>
       {text.split("\n").map((line, i) => (
@@ -28,8 +28,8 @@ export function ToolActionBody({ name, args, result }: Props) {
   if (name === "execute" && typeof args.command === "string") {
     return (
       <div className="font-mono text-xs">
-        <div className="whitespace-pre-wrap break-all text-green-400">$ {args.command}</div>
-        {result !== undefined && <pre className="mt-1.5 max-h-56 overflow-auto whitespace-pre-wrap text-neutral-300">{result}</pre>}
+        <div className="whitespace-pre-wrap break-all text-green-400 light:text-green-600">$ {args.command}</div>
+        {result !== undefined && <pre className="mt-1.5 max-h-56 overflow-auto whitespace-pre-wrap text-neutral-300 light:text-neutral-700">{result}</pre>}
       </div>
     );
   }
@@ -37,7 +37,7 @@ export function ToolActionBody({ name, args, result }: Props) {
   if (name === "edit_file" && typeof args.old_string === "string" && typeof args.new_string === "string") {
     return (
       <div className="max-h-64 overflow-auto font-mono text-xs">
-        {typeof args.file_path === "string" && <div className="mb-1 break-all text-neutral-400">{args.file_path}</div>}
+        {typeof args.file_path === "string" && <div className="mb-1 break-all text-neutral-400 light:text-neutral-600">{args.file_path}</div>}
         <DiffLines text={args.old_string} sign="-" />
         <DiffLines text={args.new_string} sign="+" />
         {result !== undefined && <div className="mt-1.5 whitespace-pre-wrap text-[11px] text-neutral-500">{result}</div>}
@@ -48,7 +48,7 @@ export function ToolActionBody({ name, args, result }: Props) {
   if (name === "write_file" && typeof args.content === "string") {
     return (
       <div className="max-h-64 overflow-auto font-mono text-xs">
-        {typeof args.file_path === "string" && <div className="mb-1 break-all text-neutral-400">{args.file_path}</div>}
+        {typeof args.file_path === "string" && <div className="mb-1 break-all text-neutral-400 light:text-neutral-600">{args.file_path}</div>}
         <DiffLines text={args.content} sign="+" />
         {result !== undefined && <div className="mt-1.5 whitespace-pre-wrap text-[11px] text-neutral-500">{result}</div>}
       </div>
@@ -58,10 +58,10 @@ export function ToolActionBody({ name, args, result }: Props) {
   return (
     <div>
       {Object.keys(args).length > 0 && (
-        <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-all text-xs text-neutral-200">{JSON.stringify(args, null, 2)}</pre>
+        <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-all text-xs text-neutral-200 light:text-neutral-800">{JSON.stringify(args, null, 2)}</pre>
       )}
       {result !== undefined && (
-        <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-all text-xs text-neutral-200">{result}</pre>
+        <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-all text-xs text-neutral-200 light:text-neutral-800">{result}</pre>
       )}
     </div>
   );

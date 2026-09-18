@@ -26,13 +26,13 @@ export function ErrorBlock({ content }: { content: string }) {
   }
 
   return (
-    <div className="rounded-lg border border-red-900 bg-red-950/40 p-2.5 text-red-100">
+    <div className="rounded-lg border border-red-900 light:border-red-200 bg-red-950/40 light:bg-red-50 p-2.5 text-red-100 light:text-red-900">
       <div className="flex items-start gap-2">
-        <AlertCircle className="mt-0.5 h-4 w-4 flex-none text-red-400" />
+        <AlertCircle className="mt-0.5 h-4 w-4 flex-none text-red-400 light:text-red-600" />
         <div className="min-w-0 flex-1">
           <div className="break-words text-xs leading-relaxed">{firstLine}</div>
           {expanded && hasMore && (
-            <pre className="mt-1.5 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded bg-neutral-950/60 p-1.5 text-[11px] text-red-200/90">
+            <pre className="mt-1.5 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded bg-neutral-950/60 light:bg-neutral-100 p-1.5 text-[11px] text-red-200/90 light:text-red-800/90">
               {content}
             </pre>
           )}
@@ -40,7 +40,7 @@ export function ErrorBlock({ content }: { content: string }) {
         <button
           onClick={copy}
           title="Copy full error"
-          className="flex-none cursor-pointer text-red-400/70 hover:text-red-200"
+          className="flex-none cursor-pointer text-red-400/70 light:text-red-600/90 hover:text-red-200 light:hover:text-red-800"
         >
           {copied ? <CopyCheck className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
         </button>
@@ -48,7 +48,7 @@ export function ErrorBlock({ content }: { content: string }) {
       {hasMore && (
         <button
           onClick={() => setExpanded((e) => !e)}
-          className="mt-1 flex cursor-pointer items-center gap-0.5 text-[11px] text-red-400/80 hover:text-red-200"
+          className="mt-1 flex cursor-pointer items-center gap-0.5 text-[11px] text-red-400/80 light:text-red-600/90 hover:text-red-200 light:hover:text-red-800"
         >
           {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
           {expanded ? "Hide details" : "Show details"}

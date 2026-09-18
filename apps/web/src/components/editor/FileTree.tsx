@@ -85,7 +85,7 @@ function Tree({ nodes, selected, onSelect, expandedPaths, toggleExpand, statusMa
               <button
                 type="button"
                 onClick={() => toggleExpand(node.path)}
-                className="flex w-full cursor-pointer items-center gap-1 rounded px-1.5 py-1 text-left hover:bg-neutral-800"
+                className="flex w-full cursor-pointer items-center gap-1 rounded px-1.5 py-1 text-left hover:bg-neutral-800 light:hover:bg-neutral-100"
               >
                 {isOpen ? (
                   <ChevronDown className="h-3 w-3 flex-none text-neutral-500" />
@@ -96,7 +96,7 @@ function Tree({ nodes, selected, onSelect, expandedPaths, toggleExpand, statusMa
                 <span className="truncate">{node.name}</span>
               </button>
               {isOpen && (
-                <div className="ml-[7px] border-l border-neutral-800/70 pl-[9px]">
+                <div className="ml-[7px] border-l border-neutral-800/70 light:border-neutral-200/70 pl-[9px]">
                   <Tree
                     nodes={node.children ?? []}
                     selected={selected}
@@ -118,8 +118,8 @@ function Tree({ nodes, selected, onSelect, expandedPaths, toggleExpand, statusMa
           <div
             key={node.path}
             onClick={() => onSelect(node.path)}
-            className={`flex cursor-pointer items-center gap-1.5 rounded px-1.5 py-1 hover:bg-neutral-800 ${
-              selected === node.path ? "bg-blue-900/60" : ""
+            className={`flex cursor-pointer items-center gap-1.5 rounded px-1.5 py-1 hover:bg-neutral-800 light:hover:bg-neutral-100 ${
+              selected === node.path ? "bg-blue-900/60 light:bg-blue-100" : ""
             }`}
           >
             <FileIcon name={node.name} />
@@ -173,7 +173,7 @@ export function FileTree({ nodes, selected, onSelect, ledger = [], onRefresh, lo
 
   return (
     <div className="flex h-full min-h-0 flex-col text-[13px]">
-      <div className="sticky top-0 z-10 flex flex-none items-center gap-1 border-b border-neutral-800 bg-neutral-900 px-2 py-1.5">
+      <div className="sticky top-0 z-10 flex flex-none items-center gap-1 border-b border-neutral-800 light:border-neutral-200 bg-neutral-900 light:bg-neutral-50 px-2 py-1.5">
         <div className="relative flex-1">
           <Search className="pointer-events-none absolute left-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-neutral-500" />
           <input
@@ -181,14 +181,14 @@ export function FileTree({ nodes, selected, onSelect, ledger = [], onRefresh, lo
             value={query}
             onChange={(e) => setQuery(e.target.value.toLowerCase())}
             placeholder="Filter files…"
-            className="w-full rounded border border-neutral-700 bg-neutral-950 py-1 pl-6 pr-2 text-xs text-neutral-200 outline-none focus:border-blue-500"
+            className="w-full rounded border border-neutral-700 light:border-neutral-300 bg-neutral-950 light:bg-white py-1 pl-6 pr-2 text-xs text-neutral-200 light:text-neutral-800 outline-none focus:border-blue-500"
           />
           {query && (
             <button
               type="button"
               onClick={() => setQuery("")}
               title="Clear filter"
-              className="absolute right-1 top-1/2 -translate-y-1/2 cursor-pointer text-neutral-500 hover:text-neutral-200"
+              className="absolute right-1 top-1/2 -translate-y-1/2 cursor-pointer text-neutral-500 hover:text-neutral-200 light:hover:text-neutral-800"
             >
               <X className="h-3 w-3" />
             </button>
@@ -198,7 +198,7 @@ export function FileTree({ nodes, selected, onSelect, ledger = [], onRefresh, lo
           type="button"
           onClick={() => setExpandedPaths(new Set())}
           title="Collapse all"
-          className="flex-none cursor-pointer rounded p-1 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200"
+          className="flex-none cursor-pointer rounded p-1 text-neutral-400 light:text-neutral-600 hover:bg-neutral-800 light:hover:bg-neutral-100 hover:text-neutral-200 light:hover:text-neutral-800"
         >
           <ChevronsDownUp className="h-3.5 w-3.5" />
         </button>
@@ -207,7 +207,7 @@ export function FileTree({ nodes, selected, onSelect, ledger = [], onRefresh, lo
             type="button"
             onClick={onRefresh}
             title="Refresh"
-            className="flex-none cursor-pointer rounded p-1 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200"
+            className="flex-none cursor-pointer rounded p-1 text-neutral-400 light:text-neutral-600 hover:bg-neutral-800 light:hover:bg-neutral-100 hover:text-neutral-200 light:hover:text-neutral-800"
           >
             <RefreshCw className="h-3.5 w-3.5" />
           </button>

@@ -4,6 +4,7 @@ import { SERVER_URL } from "../../lib/ws-client";
 import { apiFetch } from "../../lib/auth";
 import { FolderBrowserModal } from "./FolderBrowserModal";
 import { UserMenu } from "../auth/UserMenu";
+import { ThemeToggle } from "../layout/ThemeToggle";
 import { useSession } from "../../lib/session";
 
 interface Props {
@@ -51,7 +52,7 @@ function normalizeGlobList(value: string, projectRoot: string): string {
 }
 
 const fieldClass =
-  "rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-blue-500";
+  "rounded-md border border-neutral-700 light:border-neutral-300 bg-neutral-900 light:bg-neutral-50 px-3 py-2 text-sm text-neutral-100 light:text-neutral-900 outline-none focus:border-blue-500";
 const labelClass = "text-[11px] uppercase tracking-wide text-neutral-500";
 
 type BrowseTarget = "project" | "autoApprove" | "readOnly" | null;
@@ -186,8 +187,14 @@ export function WorkspacePicker({ onOpen }: Props) {
     <div className="flex h-screen items-center justify-center overflow-y-auto px-5 py-6">
       <div className="flex w-full max-w-[520px] flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h1 className="text-2xl font-bold text-neutral-100">Code Migration Agents</h1>
-        <UserMenu onKeysChanged={() => setKeysVersion((v) => v + 1)} />
+        <div className="flex items-center gap-2.5">
+          <img src="/logo.png" alt="" className="h-9 w-9 flex-none" />
+          <h1 className="text-2xl font-bold text-neutral-100 light:text-neutral-900">Code Migration Agents</h1>
+        </div>
+        <div className="flex items-center gap-2">
+          <ThemeToggle />
+          <UserMenu onKeysChanged={() => setKeysVersion((v) => v + 1)} />
+        </div>
       </div>
 
       <label className={labelClass}>Project folder or GitHub repo</label>
@@ -202,7 +209,7 @@ export function WorkspacePicker({ onOpen }: Props) {
         <button
           type="button"
           onClick={() => setBrowseTarget("project")}
-          className="cursor-pointer rounded-md border border-neutral-700 bg-neutral-800 px-3 text-xs text-neutral-200 hover:bg-neutral-700"
+          className="cursor-pointer rounded-md border border-neutral-700 light:border-neutral-300 bg-neutral-800 light:bg-neutral-100 px-3 text-xs text-neutral-200 light:text-neutral-800 hover:bg-neutral-700 light:hover:bg-neutral-200"
         >
           Browse…
         </button>
@@ -217,7 +224,6 @@ export function WorkspacePicker({ onOpen }: Props) {
         {providers.map((p) => (
           <option key={p.id} value={p.id}>
             {p.label}
-            {p.serverKey ? " — key on server" : p.userKey ? " — your saved key" : ""}
           </option>
         ))}
       </select>
@@ -256,13 +262,13 @@ export function WorkspacePicker({ onOpen }: Props) {
       <button
         type="button"
         onClick={() => setShowAdvanced((s) => !s)}
-        className="self-start text-xs text-blue-400 hover:text-blue-300"
+        className="self-start text-xs text-blue-400 light:text-blue-600 hover:text-blue-300 light:hover:text-blue-800"
       >
         {showAdvanced ? "▾" : "▸"} Migration settings
       </button>
 
       {showAdvanced && (
-        <div className="flex flex-col gap-3 rounded-md border border-neutral-800 bg-neutral-900/50 p-3">
+        <div className="flex flex-col gap-3 rounded-md border border-neutral-800 light:border-neutral-200 bg-neutral-900/50 light:bg-neutral-50 p-3">
           <label className={labelClass}>Output folder — auto-approve writes to (comma-separated)</label>
           <div className="flex gap-2">
             <input
@@ -277,7 +283,7 @@ export function WorkspacePicker({ onOpen }: Props) {
             <button
               type="button"
               onClick={() => setBrowseTarget("autoApprove")}
-              className="cursor-pointer rounded-md border border-neutral-700 bg-neutral-800 px-3 text-xs text-neutral-200 hover:bg-neutral-700"
+              className="cursor-pointer rounded-md border border-neutral-700 light:border-neutral-300 bg-neutral-800 light:bg-neutral-100 px-3 text-xs text-neutral-200 light:text-neutral-800 hover:bg-neutral-700 light:hover:bg-neutral-200"
             >
               Browse…
             </button>
@@ -302,7 +308,7 @@ export function WorkspacePicker({ onOpen }: Props) {
             <button
               type="button"
               onClick={() => setBrowseTarget("readOnly")}
-              className="cursor-pointer rounded-md border border-neutral-700 bg-neutral-800 px-3 text-xs text-neutral-200 hover:bg-neutral-700"
+              className="cursor-pointer rounded-md border border-neutral-700 light:border-neutral-300 bg-neutral-800 light:bg-neutral-100 px-3 text-xs text-neutral-200 light:text-neutral-800 hover:bg-neutral-700 light:hover:bg-neutral-200"
             >
               Browse…
             </button>
@@ -312,27 +318,34 @@ export function WorkspacePicker({ onOpen }: Props) {
             commands always require approval regardless.
           </p>
 
-          <label className={labelClass}>GitHub Personal Access Token (optional{signedIn ? " — your GitHub login already covers clone and push" : ""})</label>
-          <input
-            type="password"
-            placeholder="ghp_… or github_pat_…"
-            value={githubToken}
-            onChange={(e) => setGithubToken(e.target.value)}
-            className={`${fieldClass} font-mono`}
-            autoComplete="off"
-          />
-          <p className="-mt-1 text-[11px] text-neutral-500">
-            Connects GitHub's official MCP server so the agent can read/search repos, issues, and
-            PRs directly. Kept in server memory for this session only — never written to disk. Needs
-            a token with the scopes for whatever you want it to access.
-          </p>
+          {/* Signed-in users manage this token once in "My keys" instead — it already covers
+              clone/push and the agent's GitHub tools, so a second entry point here would just be
+              a confusing duplicate of the same setting. */}
+          {!signedIn && (
+            <>
+              <label className={labelClass}>GitHub Personal Access Token (optional)</label>
+              <input
+                type="password"
+                placeholder="ghp_… or github_pat_…"
+                value={githubToken}
+                onChange={(e) => setGithubToken(e.target.value)}
+                className={`${fieldClass} font-mono`}
+                autoComplete="off"
+              />
+              <p className="-mt-1 text-[11px] text-neutral-500">
+                Connects GitHub's official MCP server so the agent can read/search repos, issues, and
+                PRs directly. Kept in server memory for this session only — never written to disk. Needs
+                a token with the scopes for whatever you want it to access.
+              </p>
+            </>
+          )}
         </div>
       )}
 
       <button
         disabled={!canOpen}
         onClick={open}
-        className="mt-1 cursor-pointer rounded-md bg-blue-600 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-400"
+        className="mt-1 cursor-pointer rounded-md bg-blue-600 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-neutral-700 light:disabled:bg-neutral-200 disabled:text-neutral-400 light:disabled:text-neutral-600"
       >
         Open Workspace
       </button>

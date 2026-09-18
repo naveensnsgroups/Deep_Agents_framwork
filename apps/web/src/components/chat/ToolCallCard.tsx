@@ -113,14 +113,14 @@ export function ToolCallCard({ actionRequests, reviewConfigs, provenance, resolv
   // muted one-liner instead of keeping the loud "needs approval" amber treatment.
   if (resolved) {
     return (
-      <div className="overflow-hidden rounded-md border border-neutral-800">
+      <div className="overflow-hidden rounded-md border border-neutral-800 light:border-neutral-200">
         <button
-          className="flex w-full cursor-pointer items-center gap-2 border-none bg-neutral-900 px-2.5 py-1.5 text-left text-xs text-neutral-300 hover:bg-neutral-800"
+          className="flex w-full cursor-pointer items-center gap-2 border-none bg-neutral-900 light:bg-neutral-50 px-2.5 py-1.5 text-left text-xs text-neutral-300 light:text-neutral-700 hover:bg-neutral-800 light:hover:bg-neutral-100"
           onClick={() => setExpanded((e) => !e)}
         >
           {actionRequests.map((action, i) => (
             <span key={i} className="flex items-center gap-1">
-              <ToolIcon name={action.name} className="h-3.5 w-3.5 text-neutral-400" />
+              <ToolIcon name={action.name} className="h-3.5 w-3.5 text-neutral-400 light:text-neutral-600" />
               <span className="font-semibold">{action.name}</span>
             </span>
           ))}
@@ -130,7 +130,7 @@ export function ToolCallCard({ actionRequests, reviewConfigs, provenance, resolv
           {expanded ? <ChevronDown className="h-3.5 w-3.5 text-neutral-600" /> : <ChevronRight className="h-3.5 w-3.5 text-neutral-600" />}
         </button>
         {expanded && (
-          <div className="border-t border-neutral-800 bg-neutral-950 px-2.5 py-2">
+          <div className="border-t border-neutral-800 light:border-neutral-200 bg-neutral-950 light:bg-white px-2.5 py-2">
             {actionRequests.map((action, i) => (
               <ToolActionBody key={i} name={action.name} args={action.args} />
             ))}
@@ -141,15 +141,15 @@ export function ToolCallCard({ actionRequests, reviewConfigs, provenance, resolv
   }
 
   return (
-    <div className="rounded-lg border border-amber-900 bg-amber-950/40 p-2.5">
+    <div className="rounded-lg border border-amber-900 light:border-amber-300 bg-amber-950/40 light:bg-amber-50 p-2.5">
       {actionRequests.map((action, i) => (
         <div key={i} className="mb-2 last:mb-0">
-          <div className="mb-1 flex items-center gap-1.5 font-semibold text-amber-200">
+          <div className="mb-1 flex items-center gap-1.5 font-semibold text-amber-200 light:text-amber-800">
             <AlertTriangle className="h-4 w-4 flex-none" />
             {action.name}
           </div>
           {editing && singleAction === action && diffDraft ? (
-            <Suspense fallback={<div className="h-56 rounded border border-amber-800 p-2 text-xs text-neutral-500">Loading diff…</div>}>
+            <Suspense fallback={<div className="h-56 rounded border border-amber-800 light:border-amber-300 p-2 text-xs text-neutral-500">Loading diff…</div>}>
               <DiffMergeEditor
                 original={diffDraft.original}
                 modified={diffDraft.modified}
@@ -161,16 +161,16 @@ export function ToolCallCard({ actionRequests, reviewConfigs, provenance, resolv
             <textarea
               value={draftArgs}
               onChange={(e) => setDraftArgs(e.target.value)}
-              className="h-32 w-full resize-y rounded border border-amber-800 bg-neutral-950 p-1.5 font-mono text-xs text-neutral-100 outline-none"
+              className="h-32 w-full resize-y rounded border border-amber-800 light:border-amber-300 bg-neutral-950 light:bg-white p-1.5 font-mono text-xs text-neutral-100 light:text-neutral-900 outline-none"
             />
           ) : (
-            <div className="rounded bg-neutral-950 p-1.5 text-neutral-200">
+            <div className="rounded bg-neutral-950 light:bg-white p-1.5 text-neutral-200 light:text-neutral-800">
               <ToolActionBody name={action.name} args={action.args} />
             </div>
           )}
         </div>
       ))}
-      {editError && <div className="mb-2 text-xs text-red-400">{editError}</div>}
+      {editError && <div className="mb-2 text-xs text-red-400 light:text-red-600">{editError}</div>}
       {editing ? (
         <div className="flex gap-2">
           <button
@@ -181,7 +181,7 @@ export function ToolCallCard({ actionRequests, reviewConfigs, provenance, resolv
             Save &amp; Approve
           </button>
           <button
-            className="cursor-pointer rounded-md border border-neutral-600 bg-transparent px-3 py-1.5 text-neutral-300 hover:bg-neutral-800"
+            className="cursor-pointer rounded-md border border-neutral-600 light:border-neutral-400 bg-transparent px-3 py-1.5 text-neutral-300 light:text-neutral-700 hover:bg-neutral-800 light:hover:bg-neutral-100"
             onClick={() => setEditing(false)}
           >
             Cancel
@@ -218,7 +218,7 @@ export function ToolCallCard({ actionRequests, reviewConfigs, provenance, resolv
           <div className="flex gap-2">
             <button
               title="Approve this and auto-approve this tool for the rest of the session"
-              className="flex flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md border border-green-800 bg-transparent py-1 text-[11px] text-green-400 hover:bg-green-950"
+              className="flex flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md border border-green-800 light:border-green-300 bg-transparent py-1 text-[11px] text-green-400 light:text-green-600 hover:bg-green-950 light:hover:bg-green-50"
               onClick={onAlwaysApprove}
             >
               <ShieldCheck className="h-3 w-3" />
@@ -226,7 +226,7 @@ export function ToolCallCard({ actionRequests, reviewConfigs, provenance, resolv
             </button>
             {canEdit && (
               <button
-                className="flex flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md border border-neutral-600 bg-transparent py-1 text-[11px] text-neutral-300 hover:bg-neutral-800"
+                className="flex flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md border border-neutral-600 light:border-neutral-400 bg-transparent py-1 text-[11px] text-neutral-300 light:text-neutral-700 hover:bg-neutral-800 light:hover:bg-neutral-100"
                 onClick={startEdit}
               >
                 <Pencil className="h-3 w-3" />

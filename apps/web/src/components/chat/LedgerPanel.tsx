@@ -23,7 +23,7 @@ export function LedgerPanel({ entries }: Props) {
   );
 
   return (
-    <div className="flex-none border-b border-neutral-800 px-3 py-2.5">
+    <div className="flex-none border-b border-neutral-800 light:border-neutral-200 px-3 py-2.5">
       <button
         onClick={() => setOpen((v) => !v)}
         className="flex w-full cursor-pointer items-center gap-1.5 text-left"
@@ -57,7 +57,7 @@ export function LedgerPanel({ entries }: Props) {
               <div key={`${entry.path}-${i}`} className="flex items-start gap-1.5 py-0.5 text-xs">
                 <Icon className={`mt-0.5 h-3 w-3 flex-none ${className}`} />
                 <div className="min-w-0">
-                  <div className="break-all text-neutral-300">
+                  <div className="break-all text-neutral-300 light:text-neutral-700">
                     {entry.path}
                     {entry.target ? <span className="text-neutral-500"> → {entry.target}</span> : null}
                   </div>

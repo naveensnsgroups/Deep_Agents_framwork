@@ -31,13 +31,13 @@ function CodeBlock({ children }: { children?: ReactNode }) {
 
   return (
     <div className="group/code relative mb-2 last:mb-0">
-      <pre className="max-w-full overflow-x-auto rounded-md bg-neutral-950 p-2.5">{children}</pre>
+      <pre className="max-w-full overflow-x-auto rounded-md bg-neutral-950 light:bg-white p-2.5">{children}</pre>
       <button
         onClick={copy}
         title="Copy code"
-        className="absolute right-1.5 top-1.5 cursor-pointer rounded bg-neutral-800/80 p-1 text-neutral-400 opacity-0 transition-opacity hover:text-neutral-200 group-hover/code:opacity-100"
+        className="absolute right-1.5 top-1.5 cursor-pointer rounded bg-neutral-800/80 light:bg-neutral-200/80 p-1 text-neutral-400 light:text-neutral-600 opacity-0 transition-opacity hover:text-neutral-200 light:hover:text-neutral-800 group-hover/code:opacity-100"
       >
-        {copied ? <CopyCheck className="h-3.5 w-3.5 text-green-400" /> : <Copy className="h-3.5 w-3.5" />}
+        {copied ? <CopyCheck className="h-3.5 w-3.5 text-green-400 light:text-green-600" /> : <Copy className="h-3.5 w-3.5" />}
       </button>
     </div>
   );
@@ -46,7 +46,7 @@ function CodeBlock({ children }: { children?: ReactNode }) {
 /** Shared prose styling for agent chat messages, since Tailwind utility classes don't cascade into react-markdown's generated elements. */
 export function Markdown({ content }: Props) {
   return (
-    <div className="max-w-none text-[13px] leading-relaxed text-neutral-100">
+    <div className="max-w-none text-[13px] leading-relaxed text-neutral-100 light:text-neutral-900">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
@@ -60,19 +60,19 @@ export function Markdown({ content }: Props) {
           strong: ({ children }) => <strong className="font-semibold text-white">{children}</strong>,
           em: ({ children }) => <em className="italic">{children}</em>,
           a: ({ children, href }) => (
-            <a href={href} target="_blank" rel="noreferrer" className="break-words text-blue-400 underline hover:text-blue-300">
+            <a href={href} target="_blank" rel="noreferrer" className="break-words text-blue-400 light:text-blue-600 underline hover:text-blue-300 light:hover:text-blue-800">
               {children}
             </a>
           ),
           blockquote: ({ children }) => (
-            <blockquote className="mb-2 border-l-2 border-neutral-600 pl-2.5 text-neutral-400 last:mb-0">{children}</blockquote>
+            <blockquote className="mb-2 border-l-2 border-neutral-600 light:border-neutral-400 pl-2.5 text-neutral-400 light:text-neutral-600 last:mb-0">{children}</blockquote>
           ),
           code: ({ className, children }) => {
             const isBlock = /language-/.test(className ?? "");
             if (isBlock) {
               return <code className={`font-mono text-xs ${className ?? ""}`}>{children}</code>;
             }
-            return <code className="break-words rounded bg-neutral-700/60 px-1 py-0.5 font-mono text-[12px] text-amber-200">{children}</code>;
+            return <code className="break-words rounded bg-neutral-700/60 light:bg-neutral-200 px-1 py-0.5 font-mono text-[12px] text-amber-200 light:text-amber-800">{children}</code>;
           },
           pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
           table: ({ children }) => (
@@ -80,9 +80,9 @@ export function Markdown({ content }: Props) {
               <table className="border-collapse text-xs">{children}</table>
             </div>
           ),
-          th: ({ children }) => <th className="border border-neutral-700 px-2 py-1 text-left font-semibold">{children}</th>,
-          td: ({ children }) => <td className="border border-neutral-700 px-2 py-1">{children}</td>,
-          hr: () => <hr className="my-2 border-neutral-700" />,
+          th: ({ children }) => <th className="border border-neutral-700 light:border-neutral-300 px-2 py-1 text-left font-semibold">{children}</th>,
+          td: ({ children }) => <td className="border border-neutral-700 light:border-neutral-300 px-2 py-1">{children}</td>,
+          hr: () => <hr className="my-2 border-neutral-700 light:border-neutral-300" />,
         }}
       >
         {content}
