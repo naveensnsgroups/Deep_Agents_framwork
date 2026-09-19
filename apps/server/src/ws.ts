@@ -3,19 +3,28 @@ import { randomUUID } from "node:crypto";
 import { Command, REMOVE_ALL_MESSAGES } from "@langchain/langgraph";
 import { RemoveMessage } from "@langchain/core/messages";
 import { createWorkspaceAgent, runConfig, clearThread, type ModelCredentials, type WorkspaceAgent } from "./agent/index.js";
-import { isGitUrl, resolveGitWorkspace, pushWorkspace, cloneIntoSandbox, pushFromSandbox, assertNoEmbeddedCredentials } from "./agent/gitWorkspace.js";
+import {
+  isGitUrl,
+  resolveGitWorkspace,
+  pushWorkspace,
+  cloneIntoSandbox,
+  pushFromSandbox,
+  assertNoEmbeddedCredentials,
+  assertGitHubRepo,
+} from "./agent/gitWorkspace.js";
 import { selectSubprotocol, userForUpgrade, userScope } from "./auth.js";
 import { keepAlive } from "./heartbeat.js";
-import { allowWorkspaceRoot } from "./workspaceRegistry.js";
+import { allowWorkspaceRoot, assertHostWorkspacesAllowed } from "./workspaceRegistry.js";
 import type { E2BSandbox } from "./agent/e2bSandbox.js";
 import { acquireSandbox, isE2BEnabled, releaseSandbox } from "./agent/sandboxSession.js";
 import { GITHUB_OAUTH_SECRET, getUserSecret, USER_KEYS } from "./userSecrets.js";
 import { isReadTool, readTargetOf, scanForAgentDirectedText } from "./agent/injectionSignals.js";
+import { AnswerCollector, pendingInterrupts } from "./agent/pendingInterrupts.js";
+import { SubagentTracker } from "./agent/subagentTracker.js";
+import { traceConfig, type TraceTags } from "./agent/tracing.js";
 import type {
   ClientToServerMessage,
   ServerToClientMessage,
-  ActionRequest,
-  ReviewConfig,
   Todo,
   LedgerEntry,
   ReadProvenance,
@@ -51,6 +60,27 @@ interface Session {
    * merely stale.
    */
   recentReads: ReadProvenance[];
+  /** What the run is paused on, and the answers given so far. See AnswerCollector. */
+  answers: AnswerCollector;
+  /** Who and what this workspace's runs are, for finding them in LangSmith. */
+  traceTags?: TraceTags;
+}
+
+/**
+ * Tells the client about every request the thread is paused on. Read from the checkpoint after a
+ * run rather than from the stream's interrupt events, so a live run and a reconnect report the
+ * same thing — every pending request, each with the id it is answered by.
+ */
+function announcePending(ws: WebSocket, session: Session, snapshot: Parameters<typeof pendingInterrupts>[0], provenance: ReadProvenance[]) {
+  const pending = pendingInterrupts(snapshot);
+  session.answers.reset(pending);
+  for (const p of pending) {
+    if (p.kind === "question") {
+      send(ws, { type: "question_request", interruptId: p.id, question: p.question, options: p.options });
+    } else {
+      send(ws, { type: "interrupt_request", interruptId: p.id, actionRequests: p.actionRequests, reviewConfigs: p.reviewConfigs, provenance });
+    }
+  }
 }
 
 /**
@@ -245,7 +275,7 @@ async function extractNewEvents(ws: WebSocket, session: Session, messages: LcMes
  * entry per nesting level below that (e.g. `["tools:<call-id>"]` is inside a tool's own
  * subgraph — which is where a delegated subagent's entire run lives).
  */
-type StreamTuple = [string[], "updates" | "messages", unknown];
+type StreamTuple = [string[], "updates" | "messages" | "tasks", unknown];
 
 interface StreamChunk {
   id?: string;
@@ -310,16 +340,25 @@ async function runStreaming(
   // One entry per in-flight AI text bubble, keyed by the LangChain message id so repeated
   // chunks for the same turn accumulate into one bubble rather than starting a new one.
   const openBubbles = new Set<string>();
+  const subagents = new SubagentTracker();
 
   try {
     const stream = (await agent.stream(input, {
-      streamMode: ["updates", "messages"],
+      // "tasks" is only for the subagent cards: it is what ties a subagent's events to the
+      // `task` call that launched it. See SubagentTracker.
+      streamMode: ["updates", "messages", "tasks"],
       subgraphs: true,
       ...config,
+      ...(session.traceTags ? traceConfig(session.traceTags) : {}),
       signal: controller.signal,
     } as never)) as AsyncIterable<StreamTuple>;
 
     for await (const [namespace, mode, payload] of stream) {
+      if (mode === "tasks") {
+        for (const event of subagents.onTask(namespace, payload as Parameters<SubagentTracker["onTask"]>[1])) send(ws, event);
+        continue;
+      }
+
       if (mode === "messages") {
       // Only the top-level agent's own model turns. A delegated subagent's model calls
       // are nested one level deeper (under its own "tools:<call-id>" entry) and stay
@@ -343,21 +382,17 @@ async function runStreaming(
     // mode === "updates"
     const update = payload as Record<string, unknown>;
 
-    if ("__interrupt__" in update) {
-      const interrupts = update.__interrupt__ as Array<{ value: { actionRequests: ActionRequest[]; reviewConfigs: ReviewConfig[] } }>;
-      if (interrupts?.[0]) {
-        const { actionRequests, reviewConfigs } = interrupts[0].value;
-        // A copy: the array keeps mutating as the turn continues, and this card should show
-        // what had been read at the moment the action was proposed.
-        send(ws, { type: "interrupt_request", actionRequests, reviewConfigs, provenance: [...session.recentReads] });
-      }
-      continue;
-    }
+    // Announced from the checkpoint once the run stops (see the `finally` below). The stream
+    // reports interrupts per graph level, and only the first one was ever shown — with parallel
+    // subagents the rest went unseen, then got answered along with it.
+    if ("__interrupt__" in update) continue;
+
+    for (const event of subagents.onUpdate(namespace, update)) send(ws, event);
 
     // Recorded for every namespace, unlike everything below. Tool-call arguments are what
     // name the file a later read result refers to, and a subagent's reads matter for
-    // provenance — its interrupt surfaces to the same person — even though its activity
-    // stays off the main timeline.
+    // provenance — its interrupt surfaces to the same person. Its tool results stay off the
+    // main timeline; the subagent cards show what it is doing instead.
     if ("model_request" in update) {
       const inner = update.model_request as { messages?: StreamAiMessage[] };
       for (const m of inner.messages ?? []) {
@@ -435,8 +470,9 @@ async function runStreaming(
     // because a failed turn may have left no readable checkpoint, and losing the count is
     // recoverable where failing to send `turn_end` is not.
     try {
-      const snapshot = (await agent.getState(config)) as unknown as { values?: { messages?: unknown[] } };
+      const snapshot = (await agent.getState(config)) as unknown as StateSnapshotLike;
       session.lastMessageCount = snapshot.values?.messages?.length ?? session.lastMessageCount;
+      announcePending(ws, session, snapshot, [...session.recentReads]);
     } catch {
       // keep the previous count and let replayHistory re-derive it on the next connect
     }
@@ -447,7 +483,7 @@ async function runStreaming(
 
 interface StateSnapshotLike {
   values?: { messages?: LcMessage[]; todos?: Todo[]; migrationLedger?: LedgerEntry[] };
-  tasks?: Array<{ interrupts?: Array<{ value: unknown }> }>;
+  tasks?: Array<{ interrupts?: Array<{ id?: string; value?: unknown }> }>;
 }
 
 /**
@@ -477,13 +513,8 @@ async function replayHistory(ws: WebSocket, session: Session, threadId: string, 
     send(ws, { type: "ledger_update", entries: snapshot.values.migrationLedger });
   }
 
-  const pending = snapshot.tasks?.find((t) => t.interrupts && t.interrupts.length > 0);
-  const interruptValue = pending?.interrupts?.[0]?.value as
-    | { actionRequests: ActionRequest[]; reviewConfigs: ReviewConfig[] }
-    | undefined;
-  if (interruptValue) {
-    send(ws, { type: "interrupt_request", actionRequests: interruptValue.actionRequests, reviewConfigs: interruptValue.reviewConfigs });
-  }
+  // No provenance: the reads that led up to these requests happened in an earlier connection.
+  announcePending(ws, session, snapshot, []);
 }
 
 /**
@@ -496,15 +527,32 @@ async function replayHistory(ws: WebSocket, session: Session, threadId: string, 
  * curl upgrade request before landing this fix. `noServer: true` disables that
  * auto-registration; server.ts now owns the single `upgrade` listener and routes by path.
  */
+/**
+ * Largest chat message accepted. Generous for pasted code or logs; the ws library default
+ * (100 MB) would let any client make the server buffer that much per message.
+ */
+const MAX_CHAT_MESSAGE_BYTES = 2 * 1024 * 1024;
+
 export function createChatWebSocketServer() {
-  const wss = new WebSocketServer({ noServer: true, handleProtocols: selectSubprotocol });
+  const wss = new WebSocketServer({ noServer: true, handleProtocols: selectSubprotocol, maxPayload: MAX_CHAT_MESSAGE_BYTES });
   keepAlive(wss);
 
   wss.on("connection", (ws, request) => {
     const user = userForUpgrade(request);
-    const session: Session = { user, scope: userScope(user), lastMessageCount: 0, toolCallArgs: new Map(), recentReads: [] };
+    const session: Session = {
+      user,
+      scope: userScope(user),
+      lastMessageCount: 0,
+      toolCallArgs: new Map(),
+      recentReads: [],
+      answers: new AnswerCollector(),
+    };
 
     ws.on("close", () => {
+      // Nobody is left to see the turn's output or answer its approvals, so it stops rather than
+      // spending the user's key unseen. Every finished step is already checkpointed, and the
+      // reconnecting client replays the conversation from there.
+      session.abortController?.abort();
       session.workspaceAgent?.mcpClient?.close();
       // Kept alive for a grace period rather than killed, so a reload reconnects to it; killed
       // after that rather than billing until E2B's own timeout. See releaseSandbox.
@@ -527,8 +575,13 @@ export function createChatWebSocketServer() {
         }
 
         if (msg.type === "set_workspace") {
-          // Before anything derives a thread id from the input or boots a billed sandbox.
+          // Before anything derives a thread id from the input, boots a billed sandbox, or
+          // tears down the workspace that is currently open.
           assertNoEmbeddedCredentials(msg.projectRoot);
+          if (isGitUrl(msg.projectRoot)) assertGitHubRepo(msg.projectRoot);
+          else assertHostWorkspacesAllowed();
+          // A turn still running belongs to the workspace being left.
+          session.abortController?.abort();
           await session.workspaceAgent?.mcpClient?.close();
           const options = msg.options ?? {};
           const { credentials, gitToken, mcpToken } = await resolveCredentials(session, options);
@@ -594,6 +647,10 @@ export function createChatWebSocketServer() {
           }
           session.lastMessageCount = 0;
           session.toolCallArgs.clear();
+          // The input as typed (a repository URL or a path), not the clone directory or sandbox
+          // handle — it is what someone looking for these runs would search by. Checked above to
+          // carry no embedded credentials.
+          session.traceTags = { userId: user.id, userLogin: user.login, workspace: msg.projectRoot, model: msg.model };
           send(ws, {
             type: "workspace_ready",
             projectRoot: diskRoot,
@@ -627,53 +684,16 @@ export function createChatWebSocketServer() {
         const { agent, threadId } = session.workspaceAgent;
         const config = runConfig(threadId, session.scope);
 
-        if (msg.type === "user_message") {
-          send(ws, { type: "agent_thinking" });
-          await runStreaming(ws, session, agent, { messages: [{ role: "user", content: msg.content }] }, config);
-        } else if (msg.type === "resume_decisions") {
-          send(ws, { type: "agent_thinking" });
-          await runStreaming(ws, session, agent, new Command({ resume: { decisions: msg.decisions } }), config);
-        } else if (msg.type === "clear_chat") {
-          await clearThread(threadId);
-          session.lastMessageCount = 0;
-          session.toolCallArgs.clear();
-          send(ws, { type: "chat_cleared" });
-        } else if (msg.type === "edit_message") {
-          send(ws, { type: "agent_thinking" });
-          const snapshot = (await agent.getState(config)) as unknown as { values?: { messages?: LcMessage[] } };
-          const messages = snapshot.values?.messages ?? [];
-
-          // Find the Nth human message (0-indexed) — that's the one being edited — and
-          // cut everything from it onward, since editing it invalidates every reply and
-          // tool call that happened after it.
-          let humanSeen = -1;
-          let cutIndex = -1;
-          for (let i = 0; i < messages.length; i++) {
-            if (messageType(messages[i]) === "human") {
-              humanSeen++;
-              if (humanSeen === msg.userMessageIndex) {
-                cutIndex = i;
-                break;
-              }
-            }
-          }
-          if (cutIndex === -1) {
-            send(ws, { type: "error", message: "Could not find that message to edit." });
-            return;
-          }
-
-          const kept = messages.slice(0, cutIndex);
-          // A RemoveMessage with the REMOVE_ALL_MESSAGES sentinel id, found anywhere in the
-          // new messages array, tells LangGraph's reducer to discard all existing checkpointed
-          // messages and keep only whatever is placed after it in this same update — i.e. `kept`
-          // becomes the entire new history, with everything from the edited message onward gone.
-          await (agent.updateState(config, {
-            messages: [new RemoveMessage({ id: REMOVE_ALL_MESSAGES }), ...kept],
-          }) as unknown as Promise<void>);
-          session.lastMessageCount = kept.length;
-          session.toolCallArgs.clear();
-
-          await runStreaming(ws, session, agent, { messages: [{ role: "user", content: msg.content }] }, config);
+        // Everything below reads or writes the conversation, so it waits for the thread to be free.
+        if (busyThreads.has(threadId)) {
+          send(ws, { type: "error", message: THREAD_BUSY });
+          return;
+        }
+        busyThreads.add(threadId);
+        try {
+          await handleThreadMessage(ws, session, msg, agent, threadId, config);
+        } finally {
+          busyThreads.delete(threadId);
         }
       } catch (err) {
         send(ws, { type: "error", message: (err as Error).message });
@@ -682,4 +702,77 @@ export function createChatWebSocketServer() {
   });
 
   return wss;
+}
+
+/**
+ * Conversations with something in progress. Two runs on one thread — a second tab on the same
+ * project, or a message sent before the last turn finished — would interleave their
+ * checkpoints and corrupt the conversation. One server process serves every connection (a
+ * single ECS task), so an in-memory set covers all of them.
+ */
+const busyThreads = new Set<string>();
+
+const THREAD_BUSY =
+  "This conversation is already busy — in this tab or another one. Wait for it to finish, or press Stop there first.";
+
+async function handleThreadMessage(
+  ws: WebSocket,
+  session: Session,
+  msg: ClientToServerMessage,
+  agent: WorkspaceAgent["agent"],
+  threadId: string,
+  config: ReturnType<typeof runConfig>
+): Promise<void> {
+  if (msg.type === "user_message") {
+    send(ws, { type: "agent_thinking" });
+    await runStreaming(ws, session, agent, { messages: [{ role: "user", content: msg.content }] }, config);
+  } else if (msg.type === "resume_decisions" || msg.type === "answer_question") {
+    // Nothing runs until every pending request has its answer; see AnswerCollector.
+    const resume = session.answers.record(msg);
+    if (!resume) return;
+    send(ws, { type: "agent_thinking" });
+    await runStreaming(ws, session, agent, new Command({ resume }), config);
+  } else if (msg.type === "clear_chat") {
+    session.answers.reset();
+    await clearThread(threadId);
+    session.lastMessageCount = 0;
+    session.toolCallArgs.clear();
+    send(ws, { type: "chat_cleared" });
+  } else if (msg.type === "edit_message") {
+    send(ws, { type: "agent_thinking" });
+    const snapshot = (await agent.getState(config)) as unknown as { values?: { messages?: LcMessage[] } };
+    const messages = snapshot.values?.messages ?? [];
+
+    // Find the Nth human message (0-indexed) — that's the one being edited — and
+    // cut everything from it onward, since editing it invalidates every reply and
+    // tool call that happened after it.
+    let humanSeen = -1;
+    let cutIndex = -1;
+    for (let i = 0; i < messages.length; i++) {
+      if (messageType(messages[i]) === "human") {
+        humanSeen++;
+        if (humanSeen === msg.userMessageIndex) {
+          cutIndex = i;
+          break;
+        }
+      }
+    }
+    if (cutIndex === -1) {
+      send(ws, { type: "error", message: "Could not find that message to edit." });
+      return;
+    }
+
+    const kept = messages.slice(0, cutIndex);
+    // A RemoveMessage with the REMOVE_ALL_MESSAGES sentinel id, found anywhere in the
+    // new messages array, tells LangGraph's reducer to discard all existing checkpointed
+    // messages and keep only whatever is placed after it in this same update — i.e. `kept`
+    // becomes the entire new history, with everything from the edited message onward gone.
+    await (agent.updateState(config, {
+      messages: [new RemoveMessage({ id: REMOVE_ALL_MESSAGES }), ...kept],
+    }) as unknown as Promise<void>);
+    session.lastMessageCount = kept.length;
+    session.toolCallArgs.clear();
+
+    await runStreaming(ws, session, agent, { messages: [{ role: "user", content: msg.content }] }, config);
+  }
 }

@@ -1,4 +1,5 @@
 import type { Collection } from "mongodb";
+import { isCloudMode } from "../auth.js";
 import { E2BSandbox } from "./e2bSandbox.js";
 import { getPersistence } from "./persistence.js";
 
@@ -33,6 +34,20 @@ export function isE2BEnabled(): boolean {
 }
 
 /**
+ * A cloud deployment without sandboxes would clone repositories onto this host and run the
+ * agent's shell here, next to the server's own secrets — so it refuses to start instead.
+ */
+export function assertSandboxConfig(): void {
+  if (!isCloudMode()) return;
+  if (!isE2BEnabled()) {
+    throw new Error("CLOUD_MODE=1 requires SANDBOX_PROVIDER=e2b. Refusing to run agent work on this host.");
+  }
+  if (!process.env.E2B_API_KEY?.trim()) {
+    throw new Error("SANDBOX_PROVIDER=e2b requires E2B_API_KEY.");
+  }
+}
+
+/**
  * A live sandbox and who may use it.
  *
  * A workspace's "root" is normally a directory path, and the REST file routes, the terminal
@@ -48,7 +63,24 @@ interface Entry {
   /** Open connections using it. It is only scheduled for release once this reaches zero. */
   refs: number;
   releaseTimer?: ReturnType<typeof setTimeout>;
+  /** When the last connection let go; set only while waiting out the grace period. */
+  idleSince?: number;
 }
+
+/**
+ * Every sandbox bills the operator's E2B account whoever opened it, and E2B caps how many can
+ * run at once — so one user opening many repositories must not use up that capacity for the
+ * rest. Sandboxes still in their grace period count, since they are still running.
+ */
+function limitFromEnv(name: string, fallback: number): number {
+  const value = Number(process.env[name]);
+  return Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+export const sandboxLimits = {
+  perUser: () => limitFromEnv("MAX_SANDBOXES_PER_USER", 2),
+  total: () => limitFromEnv("MAX_SANDBOXES", 10),
+};
 
 const sessions = new Map<string, Entry>();
 
@@ -181,11 +213,13 @@ async function acquireUncached({ owner, projectKey, prepare }: AcquireOptions, k
     if (entry.owner === owner && entry.projectKey === projectKey) {
       clearTimeout(entry.releaseTimer);
       entry.releaseTimer = undefined;
+      entry.idleSince = undefined;
       entry.refs++;
       return { sandbox: entry.sandbox, root: rootForSandboxId(id), reused: true };
     }
   }
 
+  await makeRoom(owner, key);
   const store = await getRecords();
 
   // 2. Left running by an earlier process — typically this server was redeployed.
@@ -228,6 +262,40 @@ async function acquireUncached({ owner, projectKey, prepare }: AcquireOptions, k
   return { sandbox, root: rootForSandboxId(id), reused: false };
 }
 
+/**
+ * Frees a slot for one more sandbox, or refuses. An idle sandbox — nobody connected, only
+ * waiting out its grace period — is closed to make room before anyone is turned away; one that
+ * a connection is still using never is. Opens already in flight count, so two tabs opening two
+ * different repositories at the same moment cannot both slip under the limit.
+ */
+async function makeRoom(owner: string, key: string): Promise<void> {
+  const pending = [...inflight.keys()].filter((k) => k !== key);
+  const mine = [...sessions].filter(([, entry]) => entry.owner === owner);
+  const pendingMine = pending.filter((k) => k.startsWith(`${owner}\n`)).length;
+
+  if (mine.length + pendingMine >= sandboxLimits.perUser()) {
+    const idle = oldestIdle(mine);
+    if (!idle) {
+      throw new Error(
+        `You already have ${sandboxLimits.perUser()} workspaces running. Close one of them (or wait a few minutes after closing its tab) and try again.`
+      );
+    }
+    await killSandbox(idle);
+  }
+
+  if (sessions.size + pending.length >= sandboxLimits.total()) {
+    const idle = oldestIdle([...sessions]);
+    if (!idle) throw new Error("The server is at its workspace capacity right now. Please try again in a few minutes.");
+    await killSandbox(idle);
+  }
+}
+
+function oldestIdle(entries: Array<[string, Entry]>): string | undefined {
+  return entries
+    .filter(([, entry]) => entry.refs === 0 && entry.idleSince !== undefined)
+    .sort(([, a], [, b]) => a.idleSince! - b.idleSince!)[0]?.[0];
+}
+
 function register(id: string, sandbox: E2BSandbox, owner: string, projectKey: string): void {
   sessions.set(id, { sandbox, owner, projectKey, refs: 1 });
 }
@@ -256,6 +324,7 @@ export function releaseSandbox(root: string, graceMs = SANDBOX_GRACE_MS): void {
   entry.refs = Math.max(0, entry.refs - 1);
   if (entry.refs > 0 || entry.releaseTimer) return;
 
+  entry.idleSince = Date.now();
   entry.releaseTimer = setTimeout(() => void killSandbox(id), graceMs);
   entry.releaseTimer.unref();
 }
@@ -263,6 +332,7 @@ export function releaseSandbox(root: string, graceMs = SANDBOX_GRACE_MS): void {
 async function killSandbox(id: string): Promise<void> {
   const entry = sessions.get(id);
   if (!entry || entry.refs > 0) return;
+  clearTimeout(entry.releaseTimer);
   sessions.delete(id);
   await entry.sandbox.close();
   const store = await getRecords();

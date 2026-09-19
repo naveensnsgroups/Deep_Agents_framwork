@@ -87,8 +87,8 @@ export function redactForTest(content: string): string {
   return redactText(content);
 }
 
-/** Applies every pattern to one string. Shared by the middleware and by redactForTest. */
-function redactText(content: string): string {
+/** Applies every pattern to one string. Shared by the middleware, trace masking (tracing.ts) and redactForTest. */
+export function redactText(content: string): string {
   return SECRET_PATTERNS.reduce((text, entry) => {
     const matches = detectorFor(entry)(text);
     if (matches.length === 0) return text;

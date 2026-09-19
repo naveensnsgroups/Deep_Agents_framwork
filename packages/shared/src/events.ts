@@ -110,17 +110,22 @@ export interface WorkspaceOptions {
   githubToken?: string;
 }
 
+/**
+ * The user's answer to one action awaiting approval. A denial carries the user's own words;
+ * the server writes the message the model reads around them.
+ */
+export type ReviewDecision =
+  | { type: "approve" }
+  | { type: "reject"; reason?: string }
+  | { type: "edit"; editedAction: { name: string; args: Record<string, unknown> } };
+
 export type ClientToServerMessage =
   | { type: "set_workspace"; projectRoot: string; model: ModelId; options?: WorkspaceOptions }
   | { type: "user_message"; content: string }
-  | {
-      type: "resume_decisions";
-      decisions: Array<
-        | { type: "approve" }
-        | { type: "reject"; message?: string }
-        | { type: "edit"; editedAction: { name: string; args: Record<string, unknown> } }
-      >;
-    }
+  /** Answers one approval request, named by the id it arrived with. */
+  | { type: "resume_decisions"; interruptId: string; decisions: ReviewDecision[] }
+  /** Answers one `ask_user` question. */
+  | { type: "answer_question"; interruptId: string; answer: string }
   | { type: "clear_chat" }
   | { type: "edit_message"; userMessageIndex: number; content: string }
   | { type: "stop" }
@@ -139,6 +144,9 @@ export interface LedgerEntry {
   note: string;
 }
 
+/** "waiting" — paused on an approval or a question from inside the subagent. */
+export type SubagentStatus = "done" | "failed" | "waiting";
+
 export type ServerToClientMessage =
   | { type: "workspace_ready"; projectRoot: string; githubTools?: number; isGitWorkspace?: boolean }
   | { type: "push_result"; pushed: boolean; detail: string }
@@ -150,16 +158,43 @@ export type ServerToClientMessage =
   | { type: "tool_call_result"; results: ToolResultInfo[] }
   | {
       type: "interrupt_request";
+      /** Several can be pending at once (parallel subagents); each is answered by its own id. */
+      interruptId: string;
       actionRequests: ActionRequest[];
       reviewConfigs: ReviewConfig[];
       /** Files read immediately before this action was proposed — see ReadProvenance. */
       provenance?: ReadProvenance[];
     }
+  /** A subagent began (or, after an approval, resumed) a `task`. `id` is that task call's id. */
+  | { type: "subagent_start"; id: string; subagent: string; description: string }
+  /** A tool the subagent called — what it is doing right now. */
+  | { type: "subagent_activity"; id: string; tool: string; target?: string }
+  | { type: "subagent_end"; id: string; status: SubagentStatus }
+  /** The agent (or a subagent) called `ask_user` and is waiting for the answer. */
+  | { type: "question_request"; interruptId: string; question: string; options: string[] }
   | { type: "todo_update"; todos: Todo[] }
   | { type: "ledger_update"; entries: LedgerEntry[] }
   | { type: "chat_cleared" }
   | { type: "error"; message: string }
   | { type: "turn_end" };
+
+/** A file that differs from the last commit — what Push would include. */
+export interface ChangedFile {
+  path: string;
+  status: "added" | "modified" | "deleted" | "renamed";
+  /** For a rename, the path it had before. */
+  from?: string;
+}
+
+export interface WorkspaceChanges {
+  /** False when the workspace has no git history to compare against. */
+  available: boolean;
+  files: ChangedFile[];
+  /** Why `available` is false. */
+  reason?: string;
+  /** Set when the list was cut short; the full count of changed files. */
+  truncated?: number;
+}
 
 export interface BrowseEntry {
   name: string;

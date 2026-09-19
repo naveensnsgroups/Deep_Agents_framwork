@@ -1,7 +1,8 @@
 # Migration playbooks (Agent Skills)
 
 Each directory here is one **Agent Skill** — a playbook for a single source→target
-translation. They are mounted at `/skills/` inside every workspace and are how the agent
+translation. They are mounted read-only at `/skills/builtin/` inside every workspace (a user's own
+playbooks, written by `skill-author`, sit beside them at `/skills/mine/`) and are how the agent
 learns a framework's real traps instead of relying on what the model happens to remember.
 
 ## How the agent finds them

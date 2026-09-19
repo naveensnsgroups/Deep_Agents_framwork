@@ -5,7 +5,7 @@ import { MongoDBSaver, MongoDBStore } from "@langchain/langgraph-checkpoint-mong
 import { SqliteSaver } from "@langchain/langgraph-checkpoint-sqlite";
 import type { BaseCheckpointSaver, BaseStore } from "@langchain/langgraph";
 import { FilesystemBackend, StoreBackend, type AnyBackendProtocol } from "deepagents";
-import { DATA_DIR, MEMORIES_DIR } from "./paths.js";
+import { DATA_DIR, MEMORIES_DIR, USER_SKILLS_DIR } from "./paths.js";
 
 /**
  * Checkpoints untouched this long are deleted by a MongoDB TTL index. The free Atlas tier caps
@@ -19,23 +19,33 @@ export interface Persistence {
   checkpointer: BaseCheckpointSaver;
   /** Backend mounted at /memories/. */
   memories: AnyBackendProtocol;
+  /** Backend mounted at USER_SKILLS_MOUNT: the playbooks this user's agents wrote. */
+  userSkills: AnyBackendProtocol;
   /** The app's own collections (saved keys, sandbox records). Absent when running on local files. */
   db?: Db;
   close(): Promise<void>;
 }
 
 /**
- * Until per-user login exists every run falls into one "shared" namespace — the same sharing
- * the on-disk folder had. Once runs carry `configurable.user_id`, each user gets their own.
+ * A store namespace scoped to whoever the run belongs to. Without per-user login every run
+ * falls into one "shared" namespace; once runs carry `configurable.user_id`, each user gets
+ * their own, so nothing one user's agent writes is ever read by another's.
  */
-function memoriesNamespace({ config }: { config?: { configurable?: Record<string, unknown> } }): string[] {
-  const userId = config?.configurable?.user_id;
-  return ["memories", typeof userId === "string" && userId ? userId : "shared"];
+function perUser(kind: string) {
+  return ({ config }: { config?: { configurable?: Record<string, unknown> } }): string[] => {
+    const userId = config?.configurable?.user_id;
+    return [kind, typeof userId === "string" && userId ? userId : "shared"];
+  };
 }
 
 /** The /memories/ backend over any LangGraph store, namespaced per user. */
 export function memoriesBackend(store: BaseStore): AnyBackendProtocol {
-  return new StoreBackend({ store, namespace: memoriesNamespace });
+  return new StoreBackend({ store, namespace: perUser("memories") });
+}
+
+/** The user's own skills library over any LangGraph store, namespaced per user. */
+export function userSkillsBackend(store: BaseStore): AnyBackendProtocol {
+  return new StoreBackend({ store, namespace: perUser("skills") });
 }
 
 async function connectMongo(uri: string): Promise<Persistence> {
@@ -57,6 +67,7 @@ async function connectMongo(uri: string): Promise<Persistence> {
     kind: "mongodb",
     checkpointer,
     memories: memoriesBackend(store),
+    userSkills: userSkillsBackend(store),
     db: client.db(dbName),
     close: () => client.close(),
   };
@@ -64,10 +75,12 @@ async function connectMongo(uri: string): Promise<Persistence> {
 
 function useLocalFiles(): Persistence {
   fs.mkdirSync(MEMORIES_DIR, { recursive: true });
+  fs.mkdirSync(USER_SKILLS_DIR, { recursive: true });
   return {
     kind: "local",
     checkpointer: SqliteSaver.fromConnString(path.join(DATA_DIR, "sessions.sqlite")),
     memories: new FilesystemBackend({ rootDir: MEMORIES_DIR, virtualMode: true }),
+    userSkills: new FilesystemBackend({ rootDir: USER_SKILLS_DIR, virtualMode: true }),
     close: async () => {},
   };
 }

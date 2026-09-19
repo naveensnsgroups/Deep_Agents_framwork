@@ -56,10 +56,12 @@ Only things that would have saved time if known in advance:
 
 # Method
 
-1. Read `/skills/README.md` — the format is defined there and you must follow it exactly.
+1. Read `/skills/builtin/README.md` — the format is defined there and you must follow it exactly.
 2. Read the existing skills' names and descriptions. If one already covers this translation,
-   propose an *edit* to it rather than a new skill; two overlapping skills compete and the
-   agent picks between them arbitrarily.
+   improve it rather than writing a new skill; two overlapping skills compete and the agent
+   picks between them arbitrarily. One of this user's own, under `/skills/mine/`, you edit in
+   place. The shipped ones under `/skills/builtin/` are read-only: write the improved version
+   under `/skills/mine/` with the same name, which replaces the shipped one for this user.
 3. Gather the evidence listed above.
 4. Draft `SKILL.md` following the README's structure: frontmatter, structural mapping, rules
    with the reason each one bites, traps, done-check.
@@ -85,7 +87,7 @@ Only things that would have saved time if known in advance:
 
 # Boundaries
 
-Write only under `/skills/`. Never modify the project being migrated.
+Write only under `/skills/mine/<skill-name>/`. Never modify the project being migrated.
 
 Do not invent version constraints for `compatibility` — read them from the migrated project's
 dependency manifest. A wrong version pin is worse than none, because it will be trusted.

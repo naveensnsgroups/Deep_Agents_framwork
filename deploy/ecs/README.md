@@ -60,6 +60,38 @@ Every parameter listed in the task definition must exist, or the task fails to s
 deploy rolls back). Model API keys are **not** stored here: each user saves their own in
 **My keys**, and the server's keys are never used for them.
 
+#### Optional: LangSmith tracing
+
+Enabled in this deployment: `task-definition.json` reads `/deep-agents/LANGSMITH_API_KEY`, so that
+parameter must exist or the task fails to start. For a fresh setup, create it before the first
+deploy (step 1), or remove the three `LANGSMITH_*` entries to run without tracing. What gets sent
+is described under **Tracing** in the main README: traces contain your users' source code, with
+credentials masked.
+
+1. Save the key (a LangSmith API key from smith.langchain.com → Settings):
+
+   ```bash
+   read -rsp "LANGSMITH_API_KEY: " value; echo
+   aws ssm put-parameter --name "/deep-agents/LANGSMITH_API_KEY" --type SecureString --value "$value" --overwrite > /dev/null && echo "  saved"
+   unset value
+   ```
+
+2. Then add to `task-definition.json` and push — under `environment`:
+
+   ```json
+   { "name": "LANGSMITH_TRACING", "value": "true" },
+   { "name": "LANGSMITH_PROJECT", "value": "code-migration-agents" }
+   ```
+
+   and under `secrets`:
+
+   ```json
+   { "name": "LANGSMITH_API_KEY", "valueFrom": "arn:aws:ssm:ap-south-1:774697186948:parameter/deep-agents/LANGSMITH_API_KEY" }
+   ```
+
+   Add `LANGSMITH_HIDE_INPUTS` / `LANGSMITH_HIDE_OUTPUTS` set to `"true"` to send no code at all.
+   The first log line after `Server listening` says whether tracing is on and what it sends.
+
 Who may sign in is `ALLOWED_GITHUB_USERS` in `task-definition.json` (comma-separated GitHub
 usernames) — edit and push to add someone. Rotating `APP_SECRET` signs everyone out and makes
 saved keys unreadable, so users would have to save them again.

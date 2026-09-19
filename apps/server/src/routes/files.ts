@@ -6,6 +6,7 @@ import { isWorkspaceRoot, resolveInWorkspace } from "../workspaceRegistry.js";
 import { sandboxForRoot } from "../agent/sandboxSession.js";
 import { sandboxReadFile, sandboxTree } from "./sandboxFiles.js";
 import { currentUser } from "../auth.js";
+import { localChanges, localOriginal, sandboxChanges, sandboxOriginal } from "../agent/workspaceChanges.js";
 
 const IGNORED = new Set(["node_modules", ".git", "dist", "build", ".next"]);
 
@@ -61,6 +62,41 @@ export function filesRouter() {
         ? await sandboxReadFile(sandbox, filePath)
         : fs.readFileSync(resolveInWorkspace(root, filePath, owner), "utf-8");
       res.json({ content });
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  // What the working tree changed since the last commit. Resolved the same way as the routes
+  // above: the root must be a workspace this user opened.
+  router.get("/changes", async (req, res) => {
+    const root = String(req.query.root ?? "");
+    const owner = currentUser(res).id;
+    const sandbox = sandboxForRoot(root, owner);
+
+    try {
+      if (sandbox) return res.json(await sandboxChanges(sandbox));
+      if (!isWorkspaceRoot(root, owner) || !fs.existsSync(root)) {
+        return res.status(400).json({ error: "Invalid or missing root directory" });
+      }
+      res.json(await localChanges(root));
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  /** The committed version of one file, for the "before" side of its diff. Null when new, binary or too large. */
+  router.get("/changes/original", async (req, res) => {
+    const root = String(req.query.root ?? "");
+    const filePath = String(req.query.path ?? "");
+    const owner = currentUser(res).id;
+    const sandbox = sandboxForRoot(root, owner);
+
+    try {
+      if (sandbox) return res.json({ content: await sandboxOriginal(sandbox, filePath) });
+      // Also confirms the path stays inside the workspace, the same check a file read makes.
+      resolveInWorkspace(root, filePath, owner);
+      res.json({ content: await localOriginal(root, filePath) });
     } catch (err) {
       res.status(400).json({ error: (err as Error).message });
     }

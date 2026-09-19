@@ -7,7 +7,8 @@ interface Props {
   onClose: () => void;
 }
 
-export function SystemInfoPanel({ onClose }: Props) {
+/** Settings: for now, how the agent is configured — its prompt, playbooks, subagents and tools. */
+export function SettingsPanel({ onClose }: Props) {
   const [info, setInfo] = useState<AgentInfo | null>(null);
 
   useEffect(() => {
@@ -17,18 +18,35 @@ export function SystemInfoPanel({ onClose }: Props) {
       .catch(() => setInfo(null));
   }, []);
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-title"
         className="max-h-[80vh] w-[min(640px,90vw)] overflow-y-auto rounded-xl border border-neutral-700 light:border-neutral-300 bg-neutral-900 light:bg-neutral-50 px-5 py-4"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-2 flex items-center justify-between">
-          <h2 className="text-base font-semibold text-neutral-100 light:text-neutral-900">Agent Configuration</h2>
-          <button className="cursor-pointer border-none bg-transparent text-xl leading-none text-neutral-400 light:text-neutral-600 hover:text-white light:hover:text-neutral-900" onClick={onClose}>
+          <h2 id="settings-title" className="text-base font-semibold text-neutral-100 light:text-neutral-900">
+            Settings
+          </h2>
+          <button
+            aria-label="Close settings"
+            className="cursor-pointer border-none bg-transparent text-xl leading-none text-neutral-400 light:text-neutral-600 hover:text-white light:hover:text-neutral-900"
+            onClick={onClose}
+          >
             ×
           </button>
         </div>
+        <h3 className="text-sm font-semibold text-neutral-200 light:text-neutral-800">Agent</h3>
+        <p className="mt-0.5 text-xs text-neutral-500">What the agent is told, and what it can use.</p>
         {!info ? (
           <div className="text-neutral-400 light:text-neutral-600">Loading…</div>
         ) : (

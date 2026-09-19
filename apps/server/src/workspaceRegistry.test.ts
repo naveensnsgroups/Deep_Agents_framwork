@@ -1,6 +1,34 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import path from "node:path";
-import { allowWorkspaceRoot, isInside, isWorkspaceRoot, resolveInWorkspace } from "./workspaceRegistry.js";
+import {
+  allowWorkspaceRoot,
+  assertHostWorkspacesAllowed,
+  isInside,
+  isWorkspaceRoot,
+  resolveInWorkspace,
+} from "./workspaceRegistry.js";
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
+/**
+ * On a cloud deployment the host is the production server. A folder on it as a workspace would
+ * hand the agent's tools, the file routes and the terminal that server — its secrets included.
+ */
+describe("cloud deployments", () => {
+  it("refuses to open any folder on the host", () => {
+    vi.stubEnv("CLOUD_MODE", "1");
+    expect(() => assertHostWorkspacesAllowed()).toThrow(/only opens GitHub repositories/);
+    expect(() => allowWorkspaceRoot(path.resolve("/"), "gh:1")).toThrow(/only opens GitHub repositories/);
+    expect(isWorkspaceRoot(path.resolve("/"), "gh:1")).toBe(false);
+  });
+
+  it("still allows local folders in local development", () => {
+    vi.stubEnv("CLOUD_MODE", "");
+    expect(() => assertHostWorkspacesAllowed()).not.toThrow();
+  });
+});
 
 /**
  * These guard the fix for an arbitrary-file-read: `/api/file` used to take its root from the

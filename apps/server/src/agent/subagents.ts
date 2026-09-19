@@ -1,21 +1,15 @@
 import * as z from "zod";
+import type { AgentMiddleware } from "langchain";
 import {
   createFilesystemMiddleware,
   type AnyBackendProtocol,
-  type BackendFactory,
   type FilesystemPermission,
   type FsToolName,
   type SubAgent,
 } from "deepagents";
 import { subagentPrompt } from "./prompts.js";
-import { SKILLS_MOUNT } from "./paths.js";
-
-/**
- * The real backend is a factory (built in index.ts) so its `/large_tool_results/` and
- * `/conversation_history/` routes can bind to each run's live LangGraph state — see the
- * comment there. `createFilesystemMiddleware` resolves either shape itself.
- */
-type Backend = AnyBackendProtocol | BackendFactory;
+import { SKILL_SOURCES, USER_SKILLS_MOUNT } from "./paths.js";
+import { READ_ONLY_BUILTIN_SKILLS } from "./permissions.js";
 
 /** Read and search only — no write, edit, delete, or shell. */
 const INSPECT: FsToolName[] = ["read_file", "ls", "glob", "grep"];
@@ -25,9 +19,9 @@ const EDIT_NO_SHELL: FsToolName[] = ["read_file", "ls", "glob", "grep", "write_f
 const RUN_NO_WRITE: FsToolName[] = ["read_file", "ls", "glob", "grep", "execute"];
 
 /**
- * Permission rules are only legal on a shell-capable backend when the subagent has no
- * `execute` tool (deepagents throws otherwise, since a shell can reach any path and make
- * path rules meaningless). So these are attached only to the no-shell subagents — for
+ * Alongside an `execute` tool, deepagents only accepts rules whose paths sit under a
+ * CompositeBackend route — a shell can reach anything else, making a path rule meaningless.
+ * Project paths are not routes, so these are attached only to the no-shell subagents; for
  * them the protected globs are enforced by the framework, not merely gated on approval.
  */
 function denyWrites(protectedPaths: string[]): FilesystemPermission[] {
@@ -43,7 +37,7 @@ function denyWrites(protectedPaths: string[]): FilesystemPermission[] {
  * name, so passing the same factory here overrides the built-in one rather than stacking
  * a second copy.
  */
-function restrictTools(backend: Backend, tools: FsToolName[], permissions: FilesystemPermission[] = []) {
+function restrictTools(backend: AnyBackendProtocol, tools: FsToolName[], permissions: FilesystemPermission[] = []) {
   return [createFilesystemMiddleware({ backend, tools, permissions })];
 }
 
@@ -62,15 +56,16 @@ const TOOLSETS: Record<string, FsToolName[]> = {
 };
 
 /**
- * skill-author writes playbooks and nothing else. Framework-enforced rather than asked for:
- * it is pointed at a finished migration, so the project's own files are sitting right there,
- * and "only write under /skills/" is the kind of boundary that should not depend on a prompt.
+ * skill-author writes playbooks into the user's own library and nothing else. Framework-enforced
+ * rather than asked for: it is pointed at a finished migration, so the project's own files are
+ * sitting right there, and "only write your own playbooks" is the kind of boundary that should
+ * not depend on a prompt. The shipped library is covered by the final deny.
  *
  * First-match-wins, so the allow has to precede the deny — reversed, the deny would swallow
  * every write including the ones this subagent exists to make.
  */
 const SKILLS_ONLY_WRITE: FilesystemPermission[] = [
-  { operations: ["write"], paths: [`${SKILLS_MOUNT}**`], mode: "allow" },
+  { operations: ["write"], paths: [`${USER_SKILLS_MOUNT}**`], mode: "allow" },
   { operations: ["write"], paths: ["/**"], mode: "deny" },
 ];
 
@@ -121,28 +116,28 @@ function baseSpecs(): SubAgent[] {
       // general-purpose one does (confirmed against the deepagents source and docs). Without
       // this, the playbooks mounted at /skills/ are invisible to the one subagent whose whole
       // job is deciding the conversion rules from them.
-      skills: [SKILLS_MOUNT],
+      skills: SKILL_SOURCES,
     },
     {
       name: "converter",
       description:
         "Migrates one file or one tightly-coupled group from source form to target form, following the rulebook. Use one call per file so each conversion gets a clean context.",
       systemPrompt: subagentPrompt("converter.md"),
-      skills: [SKILLS_MOUNT],
+      skills: SKILL_SOURCES,
     },
     {
       name: "config-migrator",
       description:
         "Migrates the build and configuration layer: dependency manifests, compiler/bundler config, module resolution, and scripts. Use for config changes rather than the general converter.",
       systemPrompt: subagentPrompt("config-migrator.md"),
-      skills: [SKILLS_MOUNT],
+      skills: SKILL_SOURCES,
     },
     {
       name: "test-migrator",
       description:
         "Migrates test files: runner, lifecycle hooks, mocks, and assertions, preserving exactly what each test asserts. Use for tests rather than the general converter.",
       systemPrompt: subagentPrompt("test-migrator.md"),
-      skills: [SKILLS_MOUNT],
+      skills: SKILL_SOURCES,
     },
     {
       name: "verifier",
@@ -181,7 +176,7 @@ function baseSpecs(): SubAgent[] {
       systemPrompt: subagentPrompt("skill-author.md"),
       // It has to read the existing playbooks to avoid writing one that overlaps, and the
       // format it must follow is documented alongside them.
-      skills: [SKILLS_MOUNT],
+      skills: SKILL_SOURCES,
       responseFormat: z.object({
         skillName: z.string(),
         files: z.array(z.object({ path: z.string(), contains: z.string() })),
@@ -230,22 +225,35 @@ function baseSpecs(): SubAgent[] {
       description:
         "Handles a focused investigation or multi-step task that no specialist covers. Use only when the job is not conversion, config, test migration, verification, security review, fixing, or playbook authoring.",
       systemPrompt: subagentPrompt("general-purpose.md"),
-      skills: [SKILLS_MOUNT],
+      skills: SKILL_SOURCES,
     },
   ];
 }
 
-export function migrationSubagents(backend: Backend, protectedPaths: string[] = []): SubAgent[] {
+/**
+ * @param shared - Builds the middleware every subagent must run with (secret redaction, retries,
+ *   call limits). Custom subagents do not inherit the main agent's middleware, so it is passed in
+ *   here and called once per subagent for fresh instances.
+ */
+export function migrationSubagents(
+  backend: AnyBackendProtocol,
+  protectedPaths: string[] = [],
+  shared: () => AgentMiddleware[] = () => []
+): SubAgent[] {
   const noWriteToProtected = denyWrites(protectedPaths);
 
   return baseSpecs().map((spec) => {
     const tools = TOOLSETS[spec.name];
-    if (!tools) return spec;
-    // Path rules can only be attached where `execute` is absent; with a shell available
-    // they would be unenforceable and deepagents rejects them outright.
+    // No tool set of its own: keeps the default filesystem middleware, which applies the main
+    // agent's permissions — including the read-only shipped skills.
+    if (!tools) return { ...spec, middleware: shared() };
+
+    // Replacing the filesystem middleware replaces its permissions too, so the shipped-skills
+    // rule is restated here. Protected-path rules only where `execute` is absent (see denyWrites).
     const canWrite = tools.some((t) => MUTATING_TOOLS.includes(t));
-    const permissions = spec.name === "skill-author" ? SKILLS_ONLY_WRITE : canWrite ? noWriteToProtected : [];
-    return { ...spec, middleware: restrictTools(backend, tools, permissions) };
+    const permissions =
+      spec.name === "skill-author" ? SKILLS_ONLY_WRITE : [READ_ONLY_BUILTIN_SKILLS, ...(canWrite ? noWriteToProtected : [])];
+    return { ...spec, middleware: [...restrictTools(backend, tools, permissions), ...shared()] };
   });
 }
 

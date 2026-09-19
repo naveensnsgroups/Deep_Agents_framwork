@@ -25,14 +25,17 @@
         { "name": "ANTHROPIC_MODEL", "value": "anthropic:claude-sonnet-4-6" },
         { "name": "GOOGLE_MODEL", "value": "google-genai:gemini-3.5-flash-lite" },
         { "name": "OPENAI_MODEL", "value": "openai:gpt-5.5" },
-        { "name": "OPENROUTER_MODEL", "value": "anthropic/claude-sonnet-4.6" }
+        { "name": "OPENROUTER_MODEL", "value": "anthropic/claude-sonnet-4.6" },
+        { "name": "LANGSMITH_TRACING", "value": "true" },
+        { "name": "LANGSMITH_PROJECT", "value": "code-migration-agents" }
       ],
       "secrets": [
         { "name": "GITHUB_OAUTH_CLIENT_ID", "valueFrom": "arn:aws:ssm:ap-south-1:774697186948:parameter/deep-agents/GITHUB_OAUTH_CLIENT_ID" },
         { "name": "GITHUB_OAUTH_CLIENT_SECRET", "valueFrom": "arn:aws:ssm:ap-south-1:774697186948:parameter/deep-agents/GITHUB_OAUTH_CLIENT_SECRET" },
         { "name": "APP_SECRET", "valueFrom": "arn:aws:ssm:ap-south-1:774697186948:parameter/deep-agents/APP_SECRET" },
         { "name": "E2B_API_KEY", "valueFrom": "arn:aws:ssm:ap-south-1:774697186948:parameter/deep-agents/E2B_API_KEY" },
-        { "name": "MONGODB_URI", "valueFrom": "arn:aws:ssm:ap-south-1:774697186948:parameter/deep-agents/MONGODB_URI" }
+        { "name": "MONGODB_URI", "valueFrom": "arn:aws:ssm:ap-south-1:774697186948:parameter/deep-agents/MONGODB_URI" },
+        { "name": "LANGSMITH_API_KEY", "valueFrom": "arn:aws:ssm:ap-south-1:774697186948:parameter/deep-agents/LANGSMITH_API_KEY" }
       ],
       "healthCheck": {
         "command": ["CMD-SHELL", "node -e \"fetch('http://localhost:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""],

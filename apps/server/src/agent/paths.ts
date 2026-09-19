@@ -10,9 +10,23 @@ const DATA_DIR = path.join(__dirname, "..", "..", ".data");
  * description sit in the system prompt, and the agent reads the body on demand.
  */
 export const SKILLS_DIR = path.join(__dirname, "..", "..", "skills");
-/** Trailing slash is required: CompositeBackend strips `prefix.length` chars and re-adds
- * one slash, so a prefix without it yields a doubled slash and resolves outside the root. */
-export const SKILLS_MOUNT = "/skills/";
+
+/**
+ * Trailing slashes are required on every mount: CompositeBackend strips `prefix.length` chars
+ * and re-adds one slash, so a prefix without it yields a doubled slash and resolves outside
+ * the root.
+ *
+ * The shipped playbooks are shared by every user, so they are read-only to every agent (see
+ * READ_ONLY_BUILTIN_SKILLS). Playbooks an agent writes (skill-author) go to the user's own
+ * library instead — anything one user's agent could write into a shared library would be
+ * loaded as instructions by everyone else's.
+ */
+export const BUILTIN_SKILLS_MOUNT = "/skills/builtin/";
+export const USER_SKILLS_MOUNT = "/skills/mine/";
+/** Later sources win on a name clash, so a user's own playbook overrides a shipped one. */
+export const SKILL_SOURCES = [BUILTIN_SKILLS_MOUNT, USER_SKILLS_MOUNT];
+/** The user skills library when running without MongoDB (local development, one user). */
+export const USER_SKILLS_DIR = path.join(DATA_DIR, "skills");
 
 /**
  * Cross-project notes the agent keeps for itself. Deliberately outside any workspace: the

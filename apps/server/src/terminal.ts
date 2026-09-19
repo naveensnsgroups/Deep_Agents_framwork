@@ -119,8 +119,11 @@ function openSandboxPty(ws: WebSocket, sandbox: E2BSandbox, cols: number, rows: 
   };
 }
 
+/** Keystrokes and pastes; the ws library default (100 MB) is far beyond anything a terminal sends. */
+const MAX_TERMINAL_MESSAGE_BYTES = 1024 * 1024;
+
 export function createTerminalWebSocketServer() {
-  const wss = new WebSocketServer({ noServer: true, handleProtocols: selectSubprotocol });
+  const wss = new WebSocketServer({ noServer: true, handleProtocols: selectSubprotocol, maxPayload: MAX_TERMINAL_MESSAGE_BYTES });
   keepAlive(wss);
 
   wss.on("connection", (ws, request) => {

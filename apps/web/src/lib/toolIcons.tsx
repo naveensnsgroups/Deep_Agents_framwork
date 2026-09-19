@@ -11,6 +11,7 @@ import {
   Wrench,
   ListTodo,
   ClipboardCheck,
+  MessageCircleQuestion,
   type LucideIcon,
 } from "lucide-react";
 
@@ -26,6 +27,7 @@ const TOOL_ICON_COMPONENTS: Record<string, LucideIcon> = {
   task: Bot,
   write_todos: ListTodo,
   record_migration: ClipboardCheck,
+  ask_user: MessageCircleQuestion,
 };
 
 export function ToolIcon({ name, className }: { name: string; className?: string }) {

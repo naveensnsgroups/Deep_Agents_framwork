@@ -7,7 +7,8 @@ interface Props {
   original: string;
   modified: string;
   language: string;
-  onChange: (modified: string) => void;
+  /** Omitted for a read-only view, such as reviewing a change already made. */
+  onChange?: (modified: string) => void;
 }
 
 /**
@@ -28,6 +29,7 @@ export function DiffMergeEditor({ original, modified, language, onChange }: Prop
   const listenerRef = useRef<IDisposable | null>(null);
 
   function handleMount(editorInstance: editor.IStandaloneDiffEditor) {
+    if (!onChange) return;
     const modifiedEditor = editorInstance.getModifiedEditor();
     listenerRef.current = modifiedEditor.onDidChangeModelContent(() => {
       onChange(modifiedEditor.getValue());
@@ -37,7 +39,11 @@ export function DiffMergeEditor({ original, modified, language, onChange }: Prop
   useEffect(() => () => listenerRef.current?.dispose(), []);
 
   return (
-    <div className="h-56 overflow-hidden rounded border border-amber-800 light:border-amber-300">
+    <div
+      className={`h-56 overflow-hidden rounded border ${
+        onChange ? "border-amber-800 light:border-amber-300" : "border-neutral-800 light:border-neutral-200"
+      }`}
+    >
       <DiffEditor
         height="100%"
         theme={theme === "light" ? "light" : "vs-dark"}
@@ -48,6 +54,7 @@ export function DiffMergeEditor({ original, modified, language, onChange }: Prop
         options={{
           renderSideBySide: false,
           originalEditable: false,
+          readOnly: !onChange,
           minimap: { enabled: false },
           fontSize: 12,
           scrollBeyondLastLine: false,

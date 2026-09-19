@@ -1,43 +1,32 @@
-import { MessageSquarePlus, SquareTerminal, UploadCloud } from "lucide-react";
+import { Settings } from "lucide-react";
 import { UserMenu } from "../auth/UserMenu";
 import { ThemeToggle } from "./ThemeToggle";
 
 interface Props {
   projectRoot: string;
   model: string;
-  onShowInfo: () => void;
-  onClearChat: () => void;
+  onShowSettings: () => void;
   autoApproveNames: string[];
   onForgetAutoApprove: (name: string) => void;
-  onToggleTerminal: () => void;
-  terminalOpen: boolean;
-  isGitWorkspace: boolean;
-  onPushChanges: () => void;
 }
 
-export function Header({
-  projectRoot,
-  model,
-  onShowInfo,
-  onClearChat,
-  autoApproveNames,
-  onForgetAutoApprove,
-  onToggleTerminal,
-  terminalOpen,
-  isGitWorkspace,
-  onPushChanges,
-}: Props) {
-  function handleClearChat() {
-    if (window.confirm("Start a new conversation for this project? The current conversation history will be permanently deleted.")) {
-      onClearChat();
-    }
-  }
-
+/**
+ * App-wide bar: what is open and with which model, plus settings and account. Actions that belong
+ * to one panel (New Chat, Terminal) live in that panel's own bar instead.
+ */
+export function Header({ projectRoot, model, onShowSettings, autoApproveNames, onForgetAutoApprove }: Props) {
   return (
-    <div className="flex flex-none flex-wrap items-center justify-between gap-2 border-b border-neutral-800 light:border-neutral-200 bg-neutral-900 light:bg-neutral-50 px-3.5 py-2">
-      <div className="flex items-center gap-2 overflow-hidden">
-        <img src="/logo.png" alt="" className="h-5 w-5 flex-none" />
-        <span className="break-all text-xs text-neutral-400 light:text-neutral-600">{projectRoot}</span>
+    <div className="flex flex-none flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-neutral-800 light:border-neutral-200 bg-neutral-900 light:bg-neutral-50 px-3.5 py-2">
+      <div className="flex min-w-0 items-center gap-3">
+        <div className="flex flex-none items-center gap-2">
+          {/* The image is taller than wide: sized by height so it keeps its shape. */}
+          <img src="/logo.png" alt="" className="h-7 w-auto flex-none object-contain" />
+          <span className="text-sm font-semibold whitespace-nowrap text-neutral-100 light:text-neutral-900">Code Migration Agents</span>
+        </div>
+        <span className="h-4 w-px flex-none bg-neutral-700 light:bg-neutral-300" aria-hidden="true" />
+        <span title={projectRoot} className="min-w-0 truncate text-xs text-neutral-400 light:text-neutral-600">
+          {projectRoot}
+        </span>
         {autoApproveNames.length > 0 && (
           <div className="flex flex-wrap items-center gap-1">
             <span className="text-[10px] uppercase tracking-wide text-neutral-600">auto-approving:</span>
@@ -59,43 +48,20 @@ export function Header({
           </div>
         )}
       </div>
-      <div className="flex items-center gap-2.5">
-        <span className="rounded-full border border-blue-900 light:border-blue-200 bg-blue-950 light:bg-blue-50 px-2.5 py-0.5 text-[11px] text-blue-300 light:text-blue-800">{model}</span>
+      <div className="flex flex-none items-center gap-2.5">
+        <span
+          title="Model"
+          className="rounded-full border border-blue-900 light:border-blue-200 bg-blue-950 light:bg-blue-50 px-2.5 py-0.5 text-[11px] text-blue-300 light:text-blue-800"
+        >
+          {model}
+        </span>
         <button
-          onClick={handleClearChat}
-          title="Start a new conversation (deletes current history for this project)"
+          onClick={onShowSettings}
+          title="Settings"
           className="flex cursor-pointer items-center gap-1 rounded-md border border-neutral-700 light:border-neutral-300 bg-neutral-800 light:bg-neutral-100 px-2.5 py-1 text-xs text-neutral-200 light:text-neutral-800 hover:bg-neutral-700 light:hover:bg-neutral-200"
         >
-          <MessageSquarePlus className="h-3.5 w-3.5" />
-          New Chat
-        </button>
-        {isGitWorkspace && (
-          <button
-            onClick={onPushChanges}
-            title="Commit and push everything in this cloned workspace back to its GitHub remote"
-            className="flex cursor-pointer items-center gap-1 rounded-md border border-neutral-700 light:border-neutral-300 bg-neutral-800 light:bg-neutral-100 px-2.5 py-1 text-xs text-neutral-200 light:text-neutral-800 hover:bg-neutral-700 light:hover:bg-neutral-200"
-          >
-            <UploadCloud className="h-3.5 w-3.5" />
-            Push to GitHub
-          </button>
-        )}
-        <button
-          onClick={onToggleTerminal}
-          title="Toggle terminal"
-          className={`flex cursor-pointer items-center gap-1 rounded-md border px-2.5 py-1 text-xs ${
-            terminalOpen
-              ? "border-blue-800 light:border-blue-300 bg-blue-950 light:bg-blue-50 text-blue-300 light:text-blue-800"
-              : "border-neutral-700 light:border-neutral-300 bg-neutral-800 light:bg-neutral-100 text-neutral-200 light:text-neutral-800 hover:bg-neutral-700 light:hover:bg-neutral-200"
-          }`}
-        >
-          <SquareTerminal className="h-3.5 w-3.5" />
-          Terminal
-        </button>
-        <button
-          onClick={onShowInfo}
-          className="cursor-pointer rounded-md border border-neutral-700 light:border-neutral-300 bg-neutral-800 light:bg-neutral-100 px-2.5 py-1 text-xs text-neutral-200 light:text-neutral-800 hover:bg-neutral-700 light:hover:bg-neutral-200"
-        >
-          System
+          <Settings className="h-3.5 w-3.5" />
+          Settings
         </button>
         <ThemeToggle />
         <UserMenu />

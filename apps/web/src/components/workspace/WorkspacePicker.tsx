@@ -188,7 +188,7 @@ export function WorkspacePicker({ onOpen }: Props) {
       <div className="flex w-full max-w-[520px] flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2.5">
-          <img src="/logo.png" alt="" className="h-9 w-9 flex-none" />
+          <img src="/logo.png" alt="" className="h-10 w-auto flex-none object-contain" />
           <h1 className="text-2xl font-bold text-neutral-100 light:text-neutral-900">Code Migration Agents</h1>
         </div>
         <div className="flex items-center gap-2">

@@ -14,6 +14,7 @@ export const BUILTIN_TOOLS = [
   { name: "task", description: "Spawn a subagent to handle a delegated task" },
   { name: "write_todos", description: "Track a multi-step plan as a todo list" },
   { name: "record_migration", description: "Record per-file migration outcomes in the durable ledger" },
+  { name: "ask_user", description: "Pause and ask you a question, then continue with your answer" },
 ];
 
 export function agentInfoRouter(systemPrompt: string, subagents: AgentSubagentInfo[]) {

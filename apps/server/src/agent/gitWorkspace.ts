@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { simpleGit } from "simple-git";
 import { REPOS_DIR } from "./paths.js";
-import type { E2BSandbox } from "./e2bSandbox.js";
+import { runInSandbox, type E2BSandbox } from "./e2bSandbox.js";
 import { E2B_PROJECT_DIR } from "./sandboxSession.js";
 
 /**
@@ -33,14 +33,37 @@ export function assertNoEmbeddedCredentials(input: string): void {
   }
 }
 
+/** GitHub's own rules: owners are 1-39 alphanumerics or single hyphens, repos are [A-Za-z0-9._-]. */
+const GITHUB_REPO_URL = /^https:\/\/github\.com\/([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))\/([A-Za-z0-9._-]{1,100}?)(?:\.git)?\/?$/;
+/** A branch that git will only ever read as a ref: never an option (`-…`), never a path climb. */
+const BRANCH_NAME = /^(?!-)(?!.*\.\.)[A-Za-z0-9._/-]{1,200}$/;
+
+const UNSUPPORTED_REPO =
+  "Only GitHub repositories are supported. Enter a URL like https://github.com/owner/repo (add #branch-name for a specific branch).";
+
+/**
+ * Everything typed here ends up as an argument to `git`, and "anything ending in .git" also
+ * matched strings git reads as options or non-GitHub transports. Only the one shape the app
+ * actually supports gets through.
+ */
 function parseGitTarget(input: string): { url: string; branch?: string } {
   assertNoEmbeddedCredentials(input);
   const trimmed = input.trim();
   // "#branch" suffix, e.g. https://github.com/user/repo#feature-x — '#' can't otherwise
   // appear in a git remote URL, so this is unambiguous.
   const hashIdx = trimmed.indexOf("#");
-  if (hashIdx === -1) return { url: trimmed };
-  return { url: trimmed.slice(0, hashIdx), branch: trimmed.slice(hashIdx + 1) || undefined };
+  const url = hashIdx === -1 ? trimmed : trimmed.slice(0, hashIdx);
+  const branch = hashIdx === -1 ? undefined : trimmed.slice(hashIdx + 1) || undefined;
+
+  const match = GITHUB_REPO_URL.exec(url);
+  if (!match || match[2] === "." || match[2] === "..") throw new Error(UNSUPPORTED_REPO);
+  if (branch !== undefined && !BRANCH_NAME.test(branch)) throw new Error(`"${branch}" is not a valid branch name.`);
+  return { url, branch };
+}
+
+/** Rejects anything but a GitHub repository URL, before a sandbox is booted for it. */
+export function assertGitHubRepo(input: string): void {
+  parseGitTarget(input);
 }
 
 function slugFor(url: string, branch?: string): string {
@@ -118,7 +141,8 @@ export async function cloneIntoSandbox(sandbox: E2BSandbox, input: string, githu
   const e2b = await sandbox.ready();
 
   const branchArg = branch ? `--branch ${shellQuote(branch)} ` : "";
-  const result = await e2b.commands.run(
+  const result = await runInSandbox(
+    e2b,
     `git ${credentialArgs(githubToken)}clone ${branchArg}${shellQuote(url)} ${shellQuote(E2B_PROJECT_DIR)}`,
     { envs: gitEnv(githubToken) }
   );
@@ -143,12 +167,13 @@ export async function pushFromSandbox(
   const e2b = await sandbox.ready();
   const cwd = E2B_PROJECT_DIR;
 
-  const status = await e2b.commands.run("git status --porcelain", { cwd });
+  const status = await runInSandbox(e2b, "git status --porcelain", { cwd });
   if (!status.stdout.trim()) return { pushed: false, detail: "Nothing to push — no changes in the workspace." };
 
   // -c rather than `git config`, so the identity applies to this commit instead of being
   // written into the repository the user will get back.
-  const commit = await e2b.commands.run(
+  const commit = await runInSandbox(
+    e2b,
     `git add -A && git -c user.name='Deep Agents IDE' -c user.email='noreply@deepagents.local' commit -m ${shellQuote(message)}`,
     { cwd }
   );
@@ -156,8 +181,8 @@ export async function pushFromSandbox(
     return { pushed: false, detail: `Commit failed in the sandbox: ${scrub(commit.stderr || commit.stdout, githubToken)}` };
   }
 
-  const branch = (await e2b.commands.run("git rev-parse --abbrev-ref HEAD", { cwd })).stdout.trim();
-  const push = await e2b.commands.run(`git ${credentialArgs(githubToken)}push origin ${shellQuote(branch)}`, {
+  const branch = (await runInSandbox(e2b, "git rev-parse --abbrev-ref HEAD", { cwd })).stdout.trim();
+  const push = await runInSandbox(e2b, `git ${credentialArgs(githubToken)}push origin ${shellQuote(branch)}`, {
     cwd,
     envs: gitEnv(githubToken),
   });

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { E2BSandbox } from "./e2bSandbox.js";
 import {
   acquireSandbox,
+  assertSandboxConfig,
   detachAllSandboxSessions,
   memoryRecords,
   releaseSandbox,
@@ -175,5 +176,89 @@ describe("sandbox sessions", () => {
     const [a, b] = await Promise.all([acquireSandbox({ ...alice, prepare }), acquireSandbox({ ...alice, prepare })]);
     expect(a.root).toBe(b.root);
     expect(prepare).toHaveBeenCalledTimes(1);
+  });
+});
+
+/** Every sandbox bills the operator's E2B account, whoever opened it. */
+describe("sandbox limits", () => {
+  const project = (n: number) => ({ ...alice, projectKey: `https://github.com/a/repo-${n}` });
+
+  beforeEach(() => {
+    vi.stubEnv("MAX_SANDBOXES_PER_USER", "2");
+    vi.stubEnv("MAX_SANDBOXES", "3");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("refuses a user one more sandbox than the limit while all of theirs are in use", async () => {
+    await acquireSandbox(project(1));
+    await acquireSandbox(project(2));
+    await expect(acquireSandbox(project(3))).rejects.toThrow(/already have 2 workspaces running/);
+    expect(created).toHaveLength(2);
+  });
+
+  it("still lets a user reopen a project they already have running", async () => {
+    const first = await acquireSandbox(project(1));
+    await acquireSandbox(project(2));
+    expect((await acquireSandbox(project(1))).root).toBe(first.root);
+  });
+
+  it("makes room by closing the user's oldest idle sandbox rather than refusing", async () => {
+    vi.useFakeTimers();
+    const one = await acquireSandbox(project(1));
+    const two = await acquireSandbox(project(2));
+    releaseSandbox(one.root, 60_000);
+    await vi.advanceTimersByTimeAsync(10);
+    releaseSandbox(two.root, 60_000);
+
+    await acquireSandbox(project(3));
+    expect(created[0].closed).toBe(true);
+    expect(created[1].closed).toBe(false);
+    expect(sandboxForRoot(one.root, alice.owner)).toBeUndefined();
+  });
+
+  it("counts opens still in flight, so two at once cannot both slip under the limit", async () => {
+    await acquireSandbox(project(1));
+    const results = await Promise.allSettled([acquireSandbox(project(2)), acquireSandbox(project(3))]);
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((r) => r.status === "rejected")).toHaveLength(1);
+  });
+
+  it("caps the whole server, across users", async () => {
+    await acquireSandbox({ ...project(1), owner: "gh:1" });
+    await acquireSandbox({ ...project(1), owner: "gh:2" });
+    await acquireSandbox({ ...project(1), owner: "gh:3" });
+    await expect(acquireSandbox({ ...project(1), owner: "gh:4" })).rejects.toThrow(/at its workspace capacity/);
+  });
+});
+
+describe("assertSandboxConfig", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("refuses a cloud deployment that would run agent work on the host", () => {
+    vi.stubEnv("CLOUD_MODE", "1");
+    vi.stubEnv("SANDBOX_PROVIDER", "");
+    expect(() => assertSandboxConfig()).toThrow(/requires SANDBOX_PROVIDER=e2b/);
+  });
+
+  it("refuses sandbox mode without an E2B key", () => {
+    vi.stubEnv("CLOUD_MODE", "1");
+    vi.stubEnv("SANDBOX_PROVIDER", "e2b");
+    vi.stubEnv("E2B_API_KEY", "");
+    expect(() => assertSandboxConfig()).toThrow(/requires E2B_API_KEY/);
+  });
+
+  it("accepts a configured cloud deployment, and anything in local development", () => {
+    vi.stubEnv("CLOUD_MODE", "1");
+    vi.stubEnv("SANDBOX_PROVIDER", "e2b");
+    vi.stubEnv("E2B_API_KEY", "e2b_test");
+    expect(() => assertSandboxConfig()).not.toThrow();
+
+    vi.stubEnv("CLOUD_MODE", "");
+    vi.stubEnv("SANDBOX_PROVIDER", "");
+    expect(() => assertSandboxConfig()).not.toThrow();
   });
 });

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useId, useState } from "react";
 import { AlertTriangle, Check, ChevronDown, ChevronRight, Pencil, ShieldCheck, X } from "lucide-react";
 import type { ActionRequest, ReadProvenance, ReviewConfig } from "@deepagents-ide/shared";
 import type { Decision } from "../../types";
@@ -19,6 +19,8 @@ interface Props {
    * this card (a plain tool result) need not supply it. */
   provenance?: ReadProvenance[];
   resolved: boolean;
+  /** How the card was resolved, shown once it collapses. */
+  decision?: Decision;
   projectRoot: string;
   onDecide: (decisions: Decision[]) => void;
   onAlwaysApprove: () => void;
@@ -52,7 +54,20 @@ function actionSummary(action: ActionRequest): string {
   return typeof target === "string" ? target : "";
 }
 
-export function ToolCallCard({ actionRequests, reviewConfigs, provenance, resolved, projectRoot, onDecide, onAlwaysApprove }: Props) {
+/** Matches the server's limit (apps/server/src/agent/decisions.ts), so the box can't send what it refuses. */
+const MAX_REASON_CHARS = 2000;
+
+function DecisionLabel({ decision }: { decision?: Decision }) {
+  if (!decision) return null;
+  if (decision.type === "approve") return <span className="flex-none text-[11px] text-green-500 light:text-green-700">Approved</span>;
+  if (decision.type === "edit") return <span className="flex-none text-[11px] text-green-500 light:text-green-700">Edited</span>;
+  return <span className="flex-none text-[11px] text-red-400 light:text-red-600">Denied</span>;
+}
+
+export function ToolCallCard({ actionRequests, reviewConfigs, provenance, resolved, decision, projectRoot, onDecide, onAlwaysApprove }: Props) {
+  const [denying, setDenying] = useState(false);
+  const [reason, setReason] = useState("");
+  const reasonId = useId();
   const [editing, setEditing] = useState(false);
   const [draftArgs, setDraftArgs] = useState("");
   const [editError, setEditError] = useState<string | null>(null);
@@ -109,6 +124,12 @@ export function ToolCallCard({ actionRequests, reviewConfigs, provenance, resolv
     }
   }
 
+  function deny() {
+    const trimmed = reason.trim();
+    onDecide(actionRequests.map(() => (trimmed ? { type: "reject", reason: trimmed } : { type: "reject" })));
+    setDenying(false);
+  }
+
   // Once handled, this is history, not something needing attention — collapse it to a
   // muted one-liner instead of keeping the loud "needs approval" amber treatment.
   if (resolved) {
@@ -127,8 +148,14 @@ export function ToolCallCard({ actionRequests, reviewConfigs, provenance, resolv
           <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-neutral-500">
             {actionRequests.map(actionSummary).filter(Boolean).join(", ")}
           </span>
+          <DecisionLabel decision={decision} />
           {expanded ? <ChevronDown className="h-3.5 w-3.5 text-neutral-600" /> : <ChevronRight className="h-3.5 w-3.5 text-neutral-600" />}
         </button>
+        {decision?.type === "reject" && decision.reason && (
+          <div className="border-t border-neutral-800 light:border-neutral-200 px-2.5 py-1.5 text-xs whitespace-pre-wrap text-neutral-400 light:text-neutral-600">
+            Reason: {decision.reason}
+          </div>
+        )}
         {expanded && (
           <div className="border-t border-neutral-800 light:border-neutral-200 bg-neutral-950 light:bg-white px-2.5 py-2">
             {actionRequests.map((action, i) => (
@@ -187,6 +214,52 @@ export function ToolCallCard({ actionRequests, reviewConfigs, provenance, resolv
             Cancel
           </button>
         </div>
+      ) : denying ? (
+        <form
+          className="flex flex-col gap-1.5"
+          onSubmit={(e) => {
+            e.preventDefault();
+            deny();
+          }}
+        >
+          <label htmlFor={reasonId} className="text-xs text-amber-200 light:text-amber-800">
+            Why? The agent reads this and tries another way. Optional.
+          </label>
+          <textarea
+            id={reasonId}
+            autoFocus
+            rows={2}
+            maxLength={MAX_REASON_CHARS}
+            value={reason}
+            placeholder="e.g. keep the old function names"
+            onChange={(e) => setReason(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                deny();
+              } else if (e.key === "Escape") {
+                setDenying(false);
+              }
+            }}
+            className="w-full resize-y rounded border border-amber-800 light:border-amber-300 bg-neutral-950 light:bg-white p-1.5 text-xs text-neutral-100 light:text-neutral-900 outline-none"
+          />
+          <div className="flex gap-2">
+            <button
+              type="submit"
+              className="flex flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md border-none bg-red-800 py-1.5 text-white hover:bg-red-700"
+            >
+              <X className="h-3.5 w-3.5" />
+              Deny
+            </button>
+            <button
+              type="button"
+              className="flex-1 cursor-pointer rounded-md border border-neutral-600 light:border-neutral-400 bg-transparent py-1.5 text-neutral-300 light:text-neutral-700 hover:bg-neutral-800 light:hover:bg-neutral-100"
+              onClick={() => setDenying(false)}
+            >
+              Back
+            </button>
+          </div>
+        </form>
       ) : (
         <div className="flex flex-col gap-1.5">
           {/* Above the buttons deliberately: this is context for the decision, so it has to
@@ -209,10 +282,10 @@ export function ToolCallCard({ actionRequests, reviewConfigs, provenance, resolv
             </button>
             <button
               className="flex flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md border-none bg-red-800 py-1.5 text-white hover:bg-red-700"
-              onClick={() => onDecide(actionRequests.map(() => ({ type: "reject", message: "Denied by user" })))}
+              onClick={() => setDenying(true)}
             >
               <X className="h-3.5 w-3.5" />
-              Deny
+              Deny…
             </button>
           </div>
           <div className="flex gap-2">

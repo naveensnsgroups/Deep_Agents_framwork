@@ -41,7 +41,7 @@ Open a project — a local folder or a GitHub repository — and chat with an ag
 - **Project instructions** — a repo's own `.deepagents/AGENTS.md` is merged into the system prompt automatically.
 
 ### Safety
-- **Human approval** for every `write_file`, `edit_file`, `delete` and `execute` — with an editable Monaco **diff view** for proposed writes.
+- **Human approval** for every `write_file`, `edit_file`, `delete` and `execute` — with an editable Monaco **diff view** for proposed writes — and for every GitHub tool that acts (pushing files, merging a PR, deleting a file). GitHub tools the server labels read-only run without asking.
 - **Path rules** — auto-approve writes into an output folder, and always ask before touching legacy source.
 - **Read provenance** — each approval card lists the files the agent read just before proposing the action, and flags text in those files that addresses an AI agent (a prompt-injection signal).
 - **Credential redaction** — API keys, tokens and connection strings found in project files are masked before anything is sent to a model provider.
@@ -50,7 +50,8 @@ Open a project — a local folder or a GitHub repository — and chat with an ag
 
 ### Workspaces
 - **Local folders** (development) or **GitHub repositories** (`https://github.com/user/repo`, optionally `#branch`).
-- **Push to GitHub** button that commits and pushes the agent's approved changes.
+- **Live subagent cards** — one per delegated task, showing which subagent, what it was asked, the tools it is calling as it works, and whether it is working, waiting for you, done, failed or stopped. Parallel subagents each get their own card.
+- **Changes** panel listing every file that differs from the last commit — added, modified, deleted or renamed, whether by a file tool or a shell command — with a diff for each.
 - **Interactive terminal** in the same place the agent works (local shell, or inside the sandbox).
 - **Sandbox reconnect** — reloading the page or redeploying the server reconnects you to the same sandbox, edits intact; an abandoned sandbox is shut down after 10 minutes.
 - **Chat history restore** — reopening a project replays its conversation, todos, ledger and any pending approval.
@@ -60,7 +61,7 @@ Open a project — a local folder or a GitHub repository — and chat with an ag
 - **Sign in with GitHub**, limited to an allowlist of usernames.
 - **My keys** — each user saves their own model API keys and GitHub token, **encrypted** on the server and never shown again.
 - **Private per user** — conversations, migration ledgers, memories, sandboxes, files and terminals are isolated between users.
-- **No PAT needed** for private repos — the GitHub login itself clones and pushes.
+- **No PAT needed** for private repos — the GitHub login itself clones.
 
 ### Interface
 - Resizable file tree / editor / chat panels with persisted widths.
@@ -155,9 +156,16 @@ flowchart LR
 │   │   │       ├── sandboxSession.ts sandbox ownership, grace period, reconnect records
 │   │   │       ├── persistence.ts  MongoDB / SQLite checkpoints and memories
 │   │   │       ├── gitWorkspace.ts clone and push (local or in the sandbox)
+│   │   │       ├── workspaceChanges.ts changed files since the last commit, for the Changes panel
+│   │   │       ├── subagentTracker.ts live subagent cards from the run's stream
+│   │   │       ├── askUser.ts      ask_user tool
+│   │   │       ├── pendingInterrupts.ts every waiting approval/question, answered by id
+│   │   │       ├── decisions.ts    approval answers and denial messages
+│   │   │       ├── toolFailures.ts tool error handling and safe retries
 │   │   │       ├── ledger.ts       record_migration tool + ledger state
 │   │   │       ├── guardrails.ts   off-topic request guardrail
 │   │   │       ├── secretRedaction.ts credential redaction middleware
+│   │   │       ├── tracing.ts      LangSmith tracing with credential masking
 │   │   │       └── injectionSignals.ts agent-directed text detection
 │   │   ├── skills/                 Agent Skills (migration playbooks)
 │   │   └── evals/                  behavioural evaluations + fixture repository
@@ -256,7 +264,7 @@ All settings are environment variables (`.env` locally; SSM Parameter Store and 
 | Variable | Purpose |
 | --- | --- |
 | `PORT` | HTTP port (default `4000`). |
-| `CLOUD_MODE` | `1` on any public deployment: refuses to start without authentication and disables the local folder browser. |
+| `CLOUD_MODE` | `1` on any public deployment: refuses to start without authentication or without E2B sandboxes, opens only GitHub repositories (never a folder on the host), and disables the local folder browser. |
 | `ALLOWED_ORIGINS` | Comma-separated origins allowed for CORS and cookie-authenticated requests. |
 | `AUTH_TOKEN` | Shared access token (shared-token mode). |
 | `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET` | Enable GitHub login. |
@@ -270,8 +278,18 @@ All settings are environment variables (`.env` locally; SSM Parameter Store and 
 | --- | --- |
 | `SANDBOX_PROVIDER` | `e2b` to run agent work in E2B microVMs; unset for the local disk. |
 | `E2B_API_KEY` | E2B API key. |
+| `MAX_SANDBOXES_PER_USER`, `MAX_SANDBOXES` | Sandboxes one user, and the whole server, may run at once (defaults `2` and `10`). Idle ones are closed first to make room. |
 | `MONGODB_URI` | MongoDB connection string; unset uses local SQLite and files. |
 | `MONGODB_DB` | Database name (default `deepagents`); use a different one per environment. |
+| `LANGSMITH_TRACING`, `LANGSMITH_API_KEY` | Both set: trace every agent run to LangSmith. See [Tracing](#tracing). |
+| `LANGSMITH_PROJECT`, `LANGSMITH_ENDPOINT`, `LANGSMITH_TRACING_SAMPLING_RATE` | Project (default `code-migration-agents`), EU endpoint, fraction of runs traced. |
+| `LANGSMITH_HIDE_INPUTS`, `LANGSMITH_HIDE_OUTPUTS` | `true` sends no code or messages — only each step's shape, timing, tokens and errors. |
+
+### Tracing
+
+With LangSmith tracing on, each agent run appears as one trace: every model call, tool call and subagent (nested under its `task` call), with token counts, timing and errors. Runs are tagged with metadata `user_id`, `user_login`, `workspace` and `model`, and the tag `model:<provider>`, so one user's or one repository's runs can be filtered, and threads are grouped by conversation.
+
+Traces contain the source code the agent read and wrote. Before upload, credentials are masked with LangSmith's secret rules plus the patterns used for model-side redaction — a trace records each tool's raw result, so a committed `.env` would otherwise be sent as-is. The code itself is not masked; set `LANGSMITH_HIDE_INPUTS` and `LANGSMITH_HIDE_OUTPUTS` to keep it on the server. The server logs at startup whether tracing is on and what it sends, and flushes queued traces on shutdown.
 
 ---
 
@@ -285,7 +303,7 @@ The mode is chosen from configuration:
 | **Shared token** | `AUTH_TOKEN` is set | everyone with the token is one user | the server's keys, or one typed per session |
 | **None** | neither is set | local development only | the server's keys |
 
-The server refuses to start if GitHub login is half-configured, or if `CLOUD_MODE=1` has no authentication at all.
+The server refuses to start if GitHub login is half-configured, or if `CLOUD_MODE=1` has no authentication or no E2B sandbox configured.
 
 ### Setting up GitHub login
 
@@ -301,7 +319,7 @@ Generate `APP_SECRET` with:
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
-The login requests the `repo` and `read:user` scopes, so the agent can clone private repositories and push without a personal access token. A PAT saved in **My keys** is only needed for the agent's GitHub tools (issues, PRs, search via GitHub's MCP server) or different permissions.
+The login requests the `repo` and `read:user` scopes, so private repositories can be cloned without a personal access token. A PAT saved in **My keys** is only needed for the agent's GitHub tools (issues, PRs, search via GitHub's MCP server) or different permissions.
 
 Users are identified by GitHub's numeric id, not their username, so a renamed or re-registered username can never inherit someone else's data. Removing a username from `ALLOWED_GITHUB_USERS` locks that user out on their next request. Rotating `APP_SECRET` signs everyone out and makes saved keys unreadable (users save them again).
 
@@ -311,7 +329,9 @@ Users are identified by GitHub's numeric id, not their username, so a renamed or
 
 ### Approvals
 
-`write_file`, `edit_file`, `delete` and `execute` pause the agent through deepagents' `interruptOn` and LangGraph's interrupt/resume. The card offers **Approve**, **Deny** and **Edit** — for writes, a Monaco diff editor where **Save & Approve** writes your edited version. **Always Approve** skips the prompt for that tool for the rest of the session.
+`write_file`, `edit_file`, `delete` and `execute` pause the agent through deepagents' `interruptOn` and LangGraph's interrupt/resume. The card offers **Approve**, **Deny** and **Edit** — for writes, a Monaco diff editor where **Save & Approve** writes your edited version. **Deny** asks for an optional reason; the agent (or the subagent that asked) receives it as the action's result and tries another way instead of repeating it.
+
+When the agent needs a decision only you can make — a target version, whether to keep something — it calls `ask_user`. The run pauses on a question card with suggested answers and a text box, and continues with your answer. Subagents running in parallel can each be waiting on their own approval or question; every card is answered separately, and the run resumes once all of them are. **Always Approve** skips the prompt for that tool for the rest of the session.
 
 Subagents without shell access get framework-enforced filesystem permissions instead of prompts.
 
@@ -328,14 +348,14 @@ Subagents without shell access get framework-enforced filesystem permissions ins
 | `verifier` | Checks converted output for parity and returns a pass / fail / partial verdict |
 | `security-reviewer` | Compares migrated code with its source for protections lost in translation (read-only) |
 | `fixer` | Repairs issues the verifier reports |
-| `skill-author` | Turns a finished migration into a reusable playbook; may only write under `/skills/` |
+| `skill-author` | Turns a finished migration into a reusable playbook; may only write under `/skills/mine/` |
 | `general-purpose` | Replaces the framework's built-in general subagent with one that follows this app's rules |
 
 Prompts live in [`apps/server/src/agent/prompts/`](apps/server/src/agent/prompts/) as Markdown.
 
 ### Skills
 
-Skills in [`apps/server/skills/`](apps/server/skills/) are mounted at `/skills/`. Only each skill's `name` and `description` sit in context; the agent reads the body when a description matches the work. Nothing names a skill by path, so adding a directory is all it takes.
+Skills in [`apps/server/skills/`](apps/server/skills/) are mounted read-only at `/skills/builtin/`, since every user's agent loads them. Playbooks written by `skill-author` go to the signed-in user's own library at `/skills/mine/` and override a shipped one of the same name for that user only. Only each skill's `name` and `description` sit in context; the agent reads the body when a description matches the work. Nothing names a skill by path, so adding a directory is all it takes.
 
 | Kind | Skills |
 | --- | --- |
@@ -365,7 +385,8 @@ The agent's filesystem is a `CompositeBackend`:
 | Path | Backed by |
 | --- | --- |
 | `/` (default) | The project — the E2B sandbox, or the local folder in development |
-| `/skills/` | Bundled skills (read from the server) |
+| `/skills/builtin/` | Bundled skills, read-only to every agent |
+| `/skills/mine/` | The user's own skills: MongoDB store namespaced per user, or local files |
 | `/memories/` | MongoDB store namespaced per user, or local files |
 | `/large_tool_results/`, `/conversation_history/` | Thread state, so internal bookkeeping never lands in your repository |
 

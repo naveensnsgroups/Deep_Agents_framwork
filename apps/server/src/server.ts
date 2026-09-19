@@ -19,9 +19,11 @@ import { createTerminalWebSocketServer } from "./terminal.js";
 import { assertAuthConfig, authMode, authorizeUpgrade, isAuthEnabled, localhostOnly, requireAuth } from "./auth.js";
 import { githubAuthRouter } from "./routes/githubAuth.js";
 import { meRouter } from "./routes/me.js";
+import { rateLimit } from "./security/rateLimit.js";
 import { SYSTEM_PROMPT, SUBAGENT_INFO } from "./agent/index.js";
-import { detachAllSandboxSessions } from "./agent/sandboxSession.js";
+import { assertSandboxConfig, detachAllSandboxSessions } from "./agent/sandboxSession.js";
 import { closePersistence } from "./agent/persistence.js";
+import { describeTracing, flushTraces } from "./agent/tracing.js";
 import type { HealthInfo } from "@deepagents-ide/shared";
 
 // Aborting a turn (the Stop button) races the Gemini SDK's own stream reader: when the
@@ -36,6 +38,7 @@ process.on("unhandledRejection", (reason) => {
 });
 
 assertAuthConfig();
+assertSandboxConfig();
 
 // Comma-separated list, e.g. "https://my-app.vercel.app". Unset means reflect any origin,
 // which is only appropriate locally — a cloud deployment serves its frontend from one known
@@ -47,8 +50,27 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "")
   .filter(Boolean);
 
 const app = express();
+app.disable("x-powered-by");
+
+// Baseline browser protections for every response. Deliberately no script/style policy: the
+// editor loads Monaco from its CDN and index.html has an inline theme script, so a full CSP
+// needs those accounted for first. What is here breaks nothing — no framing of the app (so
+// it can't be overlaid by another site to trick clicks), no MIME sniffing, no referrer leaks.
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Content-Security-Policy", "frame-ancestors 'none'; base-uri 'self'; object-src 'none'");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  next();
+});
+
 app.use(cors(allowedOrigins.length > 0 ? { origin: allowedOrigins } : {}));
-app.use(express.json({ limit: "25mb" }));
+// Only the Gemini proxy carries large bodies — whole model requests, conversation and files
+// included. Everything else is small, and a large limit everywhere let any caller make the
+// server buffer 25 MB per request. The first parser to run wins, so the proxy's comes first.
+app.use("/gemini-proxy", express.json({ limit: "25mb" }));
+app.use(express.json({ limit: "1mb" }));
 
 // Before every router, so a route added later is authenticated by default rather than by
 // remembering to opt in. /api/health stays open so a load balancer can reach it.
@@ -60,10 +82,13 @@ app.get("/api/health", (_req, res) => {
   res.json(body);
 });
 
-// Unauthenticated by design: signing in is how a session is obtained.
-app.use("/auth", githubAuthRouter());
+// Unauthenticated by design: signing in is how a session is obtained. Rate-limited for the same
+// reason — each attempt makes calls to GitHub on the server's behalf.
+app.use("/auth", rateLimit({ windowMs: 15 * 60 * 1000, max: 30 }), githubAuthRouter());
 
 app.use("/gemini-proxy", localhostOnly, geminiProxyRouter());
+// Generous: the file tree and open file refresh after every tool call during a migration.
+app.use("/api", rateLimit({ windowMs: 60 * 1000, max: 600 }));
 app.use("/api", requireAuth, filesRouter());
 app.use("/api", requireAuth, browseRouter());
 app.use("/api", requireAuth, providersRouter());
@@ -119,6 +144,7 @@ server.on("upgrade", (request, socket, head) => {
 const PORT = Number(process.env.PORT ?? 4000);
 server.listen(PORT, () => {
   console.log(`Server listening on http://localhost:${PORT}`);
+  console.log(describeTracing());
 });
 
 // ECS sends SIGTERM on every redeploy, then SIGKILL after its stop timeout (30s by default).
@@ -143,7 +169,7 @@ async function shutdown(signal: string) {
   for (const wss of [chatWss, terminalWss]) {
     for (const ws of wss.clients) ws.close(1001, "Server shutting down");
   }
-  await Promise.race([closePersistence(), deadline]);
+  await Promise.race([Promise.all([closePersistence(), flushTraces()]), deadline]);
   process.exit(0);
 }
 

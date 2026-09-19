@@ -7,19 +7,27 @@ import {
   StateBackend,
   type DeepAgent,
 } from "deepagents";
-import { todoListMiddleware, modelRetryMiddleware, toolRetryMiddleware, toolCallLimitMiddleware, modelFallbackMiddleware } from "langchain";
+import {
+  todoListMiddleware,
+  modelCallLimitMiddleware,
+  modelRetryMiddleware,
+  toolCallLimitMiddleware,
+  modelFallbackMiddleware,
+} from "langchain";
 import type { MultiServerMCPClient } from "@langchain/mcp-adapters";
 import type { ModelId, WorkspaceOptions } from "@deepagents-ide/shared";
 import { providerOf, resolveModel } from "./models.js";
 import { migrationSubagents, SUBAGENT_INFO } from "./subagents.js";
-import { writeInterrupt } from "./permissions.js";
-import { connectGithubTools } from "./github.js";
+import { READ_ONLY_BUILTIN_SKILLS, writeInterrupt } from "./permissions.js";
+import { connectGithubTools, githubApprovals } from "./github.js";
 import { SYSTEM_PROMPT } from "./prompts.js";
 import { migrationLedgerMiddleware } from "./ledger.js";
+import { askUserTool } from "./askUser.js";
 import { scopeGuardrailMiddleware } from "./guardrails.js";
 import { secretRedactionMiddleware } from "./secretRedaction.js";
+import { toolFailureMiddleware } from "./toolFailures.js";
 import type { E2BSandbox } from "./e2bSandbox.js";
-import { SKILLS_DIR, SKILLS_MOUNT, MEMORIES_MOUNT } from "./paths.js";
+import { SKILLS_DIR, BUILTIN_SKILLS_MOUNT, USER_SKILLS_MOUNT, SKILL_SOURCES, MEMORIES_MOUNT } from "./paths.js";
 import { getPersistence } from "./persistence.js";
 
 export { SYSTEM_PROMPT, SUBAGENT_INFO };
@@ -31,6 +39,28 @@ export { SYSTEM_PROMPT, SUBAGENT_INFO };
  * the rest of the agent, so it's read relative to the opened workspace, not this repo.
  */
 const PROJECT_MEMORY_SOURCES = ["./.deepagents/AGENTS.md"];
+
+/**
+ * The defaults (2 retries, 1s/2s backoff) give up after ~3s — far shorter than the ~30-60s
+ * window free-tier providers (Gemini in particular) ask for in their 429 responses. This
+ * backoff (~5s/10s/20s ≈ 35s total) lets a per-minute quota window roll over instead of
+ * failing the turn on a transient rate limit.
+ */
+const MODEL_RETRY = { maxRetries: 3, initialDelayMs: 5000, maxDelayMs: 40000 };
+
+/**
+ * Per user message. The main agent mostly plans and delegates — roughly two calls per file it
+ * hands to a subagent — so this covers a large migration batch and only stops a looping run.
+ */
+const MAIN_MODEL_CALL_LIMIT = 150;
+const MAIN_TOOL_CALL_LIMIT = 150;
+
+/**
+ * Per delegated task. A converter handles one file or one tightly-coupled group, so these sit
+ * well above a normal task and only stop a subagent that is looping.
+ */
+const SUBAGENT_MODEL_CALL_LIMIT = 60;
+const SUBAGENT_TOOL_CALL_LIMIT = 100;
 
 export interface WorkspaceAgent {
   agent: DeepAgent;
@@ -82,25 +112,18 @@ export async function createWorkspaceAgent(
   // offloaded conversation history (`/conversation_history/<id>`) once summarization
   // kicks in. Left unmapped, those fall through to the default — meaning they would land
   // as real files inside the user's own git repository. Routing them to a StateBackend
-  // keeps them thread-scoped and checkpointed instead, exactly like every other backend
-  // deepagents ships that doesn't have a real project attached.
-  //
-  // StateBackend needs the live LangGraph runtime to read/write state, which only exists
-  // once a run is actually in progress — so the whole backend is built as a factory
-  // (deepagents' own default backend uses this exact same pattern) and resolved fresh by
-  // whichever middleware needs it, rather than constructed once up front.
+  // keeps them thread-scoped and checkpointed instead. A StateBackend instance finds the
+  // live run's state through LangGraph's config on each call, so one instance serves every
+  // run (the older per-run factory form is deprecated since deepagents 1.9).
   const persistence = await getPersistence();
 
-  const backend = (runtime: unknown) =>
-    new CompositeBackend(projectBackend, {
-      [SKILLS_MOUNT]: new FilesystemBackend({ rootDir: SKILLS_DIR, virtualMode: true }),
-      [MEMORIES_MOUNT]: persistence.memories,
-      // Cast: the exact BackendRuntime shape is deepagents' own internal type — this
-      // factory only ever receives whatever it hands us, so trusting that value at the
-      // boundary is enough without re-declaring its shape here.
-      "/large_tool_results/": new StateBackend(runtime as never),
-      "/conversation_history/": new StateBackend(runtime as never),
-    });
+  const backend = new CompositeBackend(projectBackend, {
+    [BUILTIN_SKILLS_MOUNT]: new FilesystemBackend({ rootDir: SKILLS_DIR, virtualMode: true }),
+    [USER_SKILLS_MOUNT]: persistence.userSkills,
+    [MEMORIES_MOUNT]: persistence.memories,
+    "/large_tool_results/": new StateBackend(),
+    "/conversation_history/": new StateBackend(),
+  });
 
   const autoApprovePaths = options.autoApprovePaths ?? [];
   const protectedPaths = options.readOnlyPaths ?? [];
@@ -115,12 +138,37 @@ export async function createWorkspaceAgent(
       return [];
     }
   });
+  const fallbackMiddleware = () =>
+    fallbacks.length > 0 ? [modelFallbackMiddleware(...(fallbacks as Parameters<typeof modelFallbackMiddleware>))] : [];
+
   const { tools: githubTools, client: mcpClient } = await connectGithubTools(options.githubToken);
+
+  // Limits: the model-call cap is what ends a runaway run, gracefully. The tool-call cap uses
+  // "continue" because "end" throws whenever the model has calls to other tools pending — it
+  // blocks further tool calls with an error message instead, and the model wraps up.
+  const limits = (modelCalls: number, toolCalls: number) => [
+    modelCallLimitMiddleware({ runLimit: modelCalls, exitBehavior: "end" }),
+    toolCallLimitMiddleware({ runLimit: toolCalls, exitBehavior: "continue" }),
+  ];
+
+  // Custom subagents never inherit the main agent's middleware (only a forked one does — see
+  // createDeepAgent in deepagents), yet they do most of the file reading. So the protections
+  // over what reaches a model provider, how tool failures are handled, and what a runaway loop
+  // can spend are attached to each of them explicitly — fresh instances per subagent, since
+  // each runs its own graph. They inherit the main agent's tools, GitHub's included.
+  const subagentMiddleware = () => [
+    secretRedactionMiddleware(),
+    modelRetryMiddleware(MODEL_RETRY),
+    ...toolFailureMiddleware(githubTools),
+    ...limits(SUBAGENT_MODEL_CALL_LIMIT, SUBAGENT_TOOL_CALL_LIMIT),
+    ...fallbackMiddleware(),
+  ];
 
   const agent = createDeepAgent({
     model: resolveModel(model, options.apiKey ?? credentials.providerKeys[providerOf(model)], credentials.allowServerKeys),
     backend,
-    tools: githubTools,
+    // Subagents inherit these, so any of them can stop and ask the user too.
+    tools: [askUserTool, ...githubTools],
     systemPrompt: SYSTEM_PROMPT,
     middleware: [
       // deepagents places custom middleware after its own built-ins, so this is not literally
@@ -143,25 +191,24 @@ export async function createWorkspaceAgent(
         keep: { type: "messages", value: 30 },
         truncateArgsSettings: { trigger: { type: "fraction", value: 0.5 } },
       }),
-      // Defaults (2 retries, 1s/2s backoff) only wait ~3s total before giving up — far
-      // shorter than the ~30-60s window free-tier providers (Gemini in particular) ask
-      // for in their 429 responses. This backoff (~5s/10s/20s ≈ 35s total) gives a
-      // per-minute quota window time to actually roll over instead of failing the turn
-      // immediately on a transient rate limit.
-      modelRetryMiddleware({ maxRetries: 3, initialDelayMs: 5000, maxDelayMs: 40000 }),
-      toolRetryMiddleware(),
-      // A migration run loops over many files; this stops a stuck agent from
-      // burning the whole budget on a retry loop rather than failing loudly.
-      toolCallLimitMiddleware({ runLimit: 150, exitBehavior: "end" }),
-      ...(fallbacks.length > 0 ? [modelFallbackMiddleware(...(fallbacks as Parameters<typeof modelFallbackMiddleware>))] : []),
+      modelRetryMiddleware(MODEL_RETRY),
+      ...toolFailureMiddleware(githubTools),
+      // A migration run loops over many files; this stops a stuck agent from burning the
+      // user's own key on a loop rather than failing loudly.
+      ...limits(MAIN_MODEL_CALL_LIMIT, MAIN_TOOL_CALL_LIMIT),
+      ...fallbackMiddleware(),
     ],
     // Includes our own `general-purpose` subagent, which replaces the framework's built-in
     // one — see its spec in subagents.ts.
-    subagents: migrationSubagents(backend, protectedPaths),
-    skills: [SKILLS_MOUNT],
+    subagents: migrationSubagents(backend, protectedPaths, subagentMiddleware),
+    skills: SKILL_SOURCES,
+    // Inherited by every subagent that does not set its own rules; subagents.ts adds it to
+    // the ones that do.
+    permissions: [READ_ONLY_BUILTIN_SKILLS],
     memory: PROJECT_MEMORY_SOURCES,
     checkpointer: persistence.checkpointer,
     interruptOn: {
+      ...githubApprovals(githubTools),
       write_file: writeInterrupt(autoApprovePaths, protectedPaths),
       edit_file: writeInterrupt(autoApprovePaths, protectedPaths),
       delete: writeInterrupt(autoApprovePaths, protectedPaths),

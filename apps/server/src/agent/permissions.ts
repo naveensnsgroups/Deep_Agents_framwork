@@ -1,4 +1,17 @@
 import micromatch from "micromatch";
+import type { FilesystemPermission } from "deepagents";
+import { BUILTIN_SKILLS_MOUNT } from "./paths.js";
+
+/**
+ * Framework-enforced, for the main agent and every subagent: the shipped playbooks are one copy
+ * shared by all users. Legal alongside a shell-capable backend because the path sits under a
+ * CompositeBackend route; in sandbox mode the files also sit outside the shell's reach entirely.
+ */
+export const READ_ONLY_BUILTIN_SKILLS: FilesystemPermission = {
+  operations: ["write"],
+  paths: [`${BUILTIN_SKILLS_MOUNT}**`],
+  mode: "deny",
+};
 
 /**
  * A migration touches hundreds of files; approving every single write by hand is not

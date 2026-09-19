@@ -31,6 +31,26 @@ export function toSandboxPath(root: string | undefined, virtualPath: string): st
   return rel ? `${root}/${rel}` : root;
 }
 
+/**
+ * Runs a command in the microVM and returns its result whatever the exit code. E2B's
+ * `commands.run` throws a CommandExitError on a non-zero exit rather than returning it, so a
+ * caller checking `result.exitCode` never saw a failure — the raw error escaped instead.
+ * Transport and lifecycle errors still throw: they are not a command's result.
+ */
+export async function runInSandbox(
+  e2b: Sandbox,
+  command: string,
+  opts?: { cwd?: string; envs?: Record<string, string> }
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  try {
+    const result = await e2b.commands.run(command, opts);
+    return { exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr };
+  } catch (err) {
+    if (err instanceof CommandExitError) return { exitCode: err.exitCode, stdout: err.stdout, stderr: err.stderr };
+    throw err;
+  }
+}
+
 /** Reverses toSandboxPath, so results carry the same paths permissions and approvals match on. */
 export function fromSandboxPath(root: string | undefined, sandboxPath: string): string {
   if (!root) return sandboxPath;

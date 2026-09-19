@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isCloudMode } from "./auth.js";
 
 /**
  * Every directory the server has itself decided to open as a workspace, and who opened it.
@@ -19,7 +20,20 @@ import path from "node:path";
  */
 const allowedRoots = new Map<string, Set<string>>();
 
+/**
+ * On a cloud deployment this server's own disk holds its secrets and every user's data, so no
+ * directory on it may become a workspace — the agent's tools, the file routes and the terminal
+ * would all run against the host. Work happens only in E2B sandboxes there. Enforced here
+ * because every host workspace passes through this one function.
+ */
+export function assertHostWorkspacesAllowed(): void {
+  if (isCloudMode()) {
+    throw new Error("This deployment only opens GitHub repositories. Enter a URL like https://github.com/owner/repo.");
+  }
+}
+
 export function allowWorkspaceRoot(root: string, ownerId: string): string {
+  assertHostWorkspacesAllowed();
   const resolved = path.resolve(root);
   let owners = allowedRoots.get(resolved);
   if (!owners) allowedRoots.set(resolved, (owners = new Set()));

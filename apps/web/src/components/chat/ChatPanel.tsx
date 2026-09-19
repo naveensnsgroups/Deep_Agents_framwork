@@ -3,6 +3,8 @@ import { Pencil, Check, X, SendHorizontal, Copy, CopyCheck, Square } from "lucid
 import type { Decision, TimelineItem } from "../../types";
 import { copyText as writeClipboard } from "../../lib/browser";
 import { ToolCallCard } from "./ToolCallCard";
+import { QuestionCard } from "./QuestionCard";
+import { SubagentCard } from "./SubagentCard";
 import { ToolBlock } from "./ToolBlock";
 import { Markdown } from "./Markdown";
 import { ErrorBlock } from "./ErrorBlock";
@@ -11,11 +13,14 @@ interface Props {
   timeline: TimelineItem[];
   busy: boolean;
   streaming: boolean;
+  /** False while the connection to the server is down and being re-established. */
+  connected: boolean;
   projectRoot: string;
   onSend: (content: string) => void;
   onStop: () => void;
   onDecide: (interruptId: string, decisions: Decision[]) => void;
   onAlwaysApprove: (interruptId: string, toolNames: string[]) => void;
+  onAnswer: (interruptId: string, answer: string) => void;
   onEditMessage: (userIndex: number, content: string) => void;
 }
 
@@ -43,7 +48,7 @@ function EmptyState({ onPick }: { onPick: (text: string) => void }) {
   );
 }
 
-export function ChatPanel({ timeline, busy, streaming, projectRoot, onSend, onStop, onDecide, onAlwaysApprove, onEditMessage }: Props) {
+export function ChatPanel({ timeline, busy, streaming, connected, projectRoot, onSend, onStop, onDecide, onAlwaysApprove, onAnswer, onEditMessage }: Props) {
   const [draft, setDraft] = useState("");
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState("");
@@ -81,10 +86,13 @@ export function ChatPanel({ timeline, busy, streaming, projectRoot, onSend, onSt
   // The workspace-ready line is a status item, so an untouched chat is not empty —
   // it just has nothing worth reading yet.
   const hasConversation = timeline.some((item) => item.kind !== "status");
+  // One turn at a time: a second message while one is still running would start a second run
+  // on the same conversation.
+  const canSend = connected && !busy && !streaming;
 
   function submit() {
     const content = draft.trim();
-    if (!content) return;
+    if (!content || !canSend) return;
     onSend(content);
     setDraft("");
   }
@@ -101,7 +109,7 @@ export function ChatPanel({ timeline, busy, streaming, projectRoot, onSend, onSt
 
   function saveEdit(userIndex: number) {
     const content = editDraft.trim();
-    if (!content) return;
+    if (!content || !canSend) return;
     onEditMessage(userIndex, content);
     setEditingIndex(null);
     setEditDraft("");
@@ -142,7 +150,7 @@ export function ChatPanel({ timeline, busy, streaming, projectRoot, onSend, onSt
                       </button>
                       <button
                         onClick={() => saveEdit(item.userIndex)}
-                        disabled={!editDraft.trim()}
+                        disabled={!editDraft.trim() || !canSend}
                         title="Save and resend (discards everything after this message)"
                         className="flex cursor-pointer items-center gap-1 rounded-md bg-blue-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-neutral-700 light:disabled:bg-neutral-200 disabled:text-neutral-400 light:disabled:text-neutral-600"
                       >
@@ -161,7 +169,7 @@ export function ChatPanel({ timeline, busy, streaming, projectRoot, onSend, onSt
                   <div className="flex items-center gap-1.5">
                     <button
                       onClick={() => startEdit(item.userIndex, item.content)}
-                      disabled={busy}
+                      disabled={!canSend}
                       title="Edit and resend"
                       className="cursor-pointer text-neutral-600 opacity-0 transition-opacity hover:text-neutral-300 light:hover:text-neutral-700 group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-0"
                     >
@@ -224,9 +232,34 @@ export function ChatPanel({ timeline, busy, streaming, projectRoot, onSend, onSt
                     reviewConfigs={item.reviewConfigs}
                     provenance={item.provenance}
                     resolved={item.resolved}
+                    decision={item.decision}
                     projectRoot={projectRoot}
                     onDecide={(decisions) => onDecide(item.id, decisions)}
                     onAlwaysApprove={() => onAlwaysApprove(item.id, item.actionRequests.map((a) => a.name))}
+                  />
+                </div>
+              );
+            case "subagent":
+              return (
+                <div key={item.id} className="flex max-w-full flex-col self-stretch">
+                  <SubagentCard
+                    subagent={item.subagent}
+                    description={item.description}
+                    status={item.status}
+                    activity={item.activity}
+                    steps={item.steps}
+                  />
+                </div>
+              );
+            case "question":
+              return (
+                <div key={item.id} className="flex max-w-full flex-col self-stretch">
+                  <QuestionCard
+                    question={item.question}
+                    options={item.options}
+                    answer={item.answer}
+                    disabled={!connected}
+                    onAnswer={(answer) => onAnswer(item.id, answer)}
                   />
                 </div>
               );
@@ -236,6 +269,12 @@ export function ChatPanel({ timeline, busy, streaming, projectRoot, onSend, onSt
         {busy && <div className="text-[13px] italic text-neutral-500">Agent is working…</div>}
       </div>
       <div className="flex-none border-t border-neutral-800 light:border-neutral-200 p-2.5">
+        {!connected && (
+          <div role="status" className="mb-2 flex items-center gap-2 text-[12px] text-amber-400 light:text-amber-700">
+            <span className="h-2 w-2 animate-pulse rounded-full bg-amber-400 light:bg-amber-600" />
+            Connection lost — reconnecting…
+          </div>
+        )}
         <div className="flex items-end gap-2">
           <textarea
             ref={inputRef}
@@ -248,8 +287,8 @@ export function ChatPanel({ timeline, busy, streaming, projectRoot, onSend, onSt
                 submit();
               }
             }}
-            placeholder="Ask the agent…"
-            disabled={busy}
+            placeholder={connected ? "Ask the agent…" : "Waiting for the connection…"}
+            disabled={busy || !connected}
             className="max-h-40 min-h-[36px] flex-1 resize-none overflow-y-auto rounded-md border border-neutral-700 light:border-neutral-300 bg-neutral-900 light:bg-neutral-50 px-2 py-2 font-sans text-[13px] leading-snug text-neutral-100 light:text-neutral-900 outline-none focus:border-blue-500 disabled:opacity-60"
           />
           {streaming ? (
@@ -263,7 +302,7 @@ export function ChatPanel({ timeline, busy, streaming, projectRoot, onSend, onSt
           ) : (
             <button
               onClick={submit}
-              disabled={busy || !draft.trim()}
+              disabled={!canSend || !draft.trim()}
               title="Send (Enter)"
               className="flex h-9 flex-none cursor-pointer items-center justify-center rounded-md bg-blue-600 px-3 text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-neutral-700 light:disabled:bg-neutral-200 disabled:text-neutral-500"
             >

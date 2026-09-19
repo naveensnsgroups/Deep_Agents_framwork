@@ -1,9 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { fakeSandbox, NotFoundError } = vi.hoisted(() => {
+const { fakeSandbox, NotFoundError, CommandExitError } = vi.hoisted(() => {
   class NotFoundError extends Error {}
+  // Shaped like the SDK's: the failed command's result travels on the error.
+  class CommandExitError extends Error {
+    readonly exitCode: number;
+    readonly stdout: string;
+    readonly stderr: string;
+    constructor(result: { exitCode: number; stdout: string; stderr: string }) {
+      super(`exit status ${result.exitCode}`);
+      this.exitCode = result.exitCode;
+      this.stdout = result.stdout;
+      this.stderr = result.stderr;
+    }
+  }
   return {
     NotFoundError,
+    CommandExitError,
     fakeSandbox: {
       sandboxId: "sbx-test",
       setTimeout: vi.fn(async () => {}),
@@ -19,11 +32,11 @@ const { fakeSandbox, NotFoundError } = vi.hoisted(() => {
 
 vi.mock("e2b", () => ({
   Sandbox: { create: vi.fn(async () => fakeSandbox) },
-  CommandExitError: class extends Error {},
+  CommandExitError,
   NotFoundError,
 }));
 
-const { E2BSandbox, toSandboxPath, fromSandboxPath } = await import("./e2bSandbox.js");
+const { E2BSandbox, toSandboxPath, fromSandboxPath, runInSandbox } = await import("./e2bSandbox.js");
 
 const ROOT = "/home/user/project";
 
@@ -128,5 +141,21 @@ describe("E2BSandbox file operations inside the project", () => {
 
     expect(result.error).toBe("file_not_found");
     expect(result.path).toBe("/nope.md");
+  });
+});
+
+// The SDK throws on a non-zero exit instead of returning it, so every `exitCode !== 0` check
+// written against its result was unreachable until this helper.
+describe("runInSandbox", () => {
+  const e2b = fakeSandbox as unknown as Parameters<typeof runInSandbox>[0];
+
+  it("returns a failed command's result instead of throwing", async () => {
+    fakeSandbox.commands.run.mockRejectedValueOnce(new CommandExitError({ exitCode: 128, stdout: "", stderr: "fatal: not a git repository" }));
+    await expect(runInSandbox(e2b, "git status")).resolves.toEqual({ exitCode: 128, stdout: "", stderr: "fatal: not a git repository" });
+  });
+
+  it("still throws when the sandbox itself fails", async () => {
+    fakeSandbox.commands.run.mockRejectedValueOnce(new Error("sandbox was reclaimed"));
+    await expect(runInSandbox(e2b, "git status")).rejects.toThrow("sandbox was reclaimed");
   });
 });

@@ -5,6 +5,8 @@ interface Props {
   sidebar: ReactNode;
   editor: ReactNode;
   chat: ReactNode;
+  /** Buttons for the editor area's own bar, after the Files toggle (e.g. the terminal toggle). */
+  editorActions?: ReactNode;
 }
 
 const MIN_SIDEBAR = 160;
@@ -31,7 +33,7 @@ function saveWidths(sidebarWidth: number, chatWidth: number) {
   }
 }
 
-export function ResizablePanels({ sidebar, editor, chat }: Props) {
+export function ResizablePanels({ sidebar, editor, chat, editorActions }: Props) {
   const saved = loadSaved();
   const [sidebarWidth, setSidebarWidth] = useState(saved.sidebarWidth ?? 240);
   const [chatWidth, setChatWidth] = useState(saved.chatWidth ?? 420);
@@ -145,13 +147,16 @@ export function ResizablePanels({ sidebar, editor, chat }: Props) {
             {sidebarOpen ? <PanelLeftClose className="h-3.5 w-3.5" /> : <PanelLeftOpen className="h-3.5 w-3.5" />}
             Files
           </button>
+          {editorActions}
           <div className="flex-1" />
+          {/* Icon only while the chat is open: its own bar already says "Chat" right beside this. */}
           <button
             onClick={() => setChatOpen((o) => !o)}
             title={chatOpen ? "Hide chat" : "Show chat"}
+            aria-label={chatOpen ? "Hide chat" : "Show chat"}
             className="flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-xs text-neutral-400 light:text-neutral-600 hover:bg-neutral-800 light:hover:bg-neutral-100 hover:text-neutral-200 light:hover:text-neutral-800"
           >
-            Chat
+            {!chatOpen && "Chat"}
             {chatOpen ? <PanelRightClose className="h-3.5 w-3.5" /> : <PanelRightOpen className="h-3.5 w-3.5" />}
           </button>
         </div>
